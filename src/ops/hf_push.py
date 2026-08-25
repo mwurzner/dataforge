@@ -47,6 +47,7 @@ SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 # Datasets whose partitions are named by RUN (ephemeral) or by DATE (state panels).
 DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
+            "e10_quote_benchmark",
             "a1_lending_market_state", "a2_vault_state",
             "b2_stuck_markets", "b5_dormancy", "universe"]
 
@@ -54,7 +55,8 @@ DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
 # back. Windowing the state panels would withhold nothing (they are freely backfillable) while
 # making the public repo less useful, so they go out at full history.
 EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
-             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence"}
+             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
+             "e10_quote_benchmark"}
 
 CARD = """---
 license: odc-by
