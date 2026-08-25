@@ -95,13 +95,16 @@ CHAINS: dict[str, Chain] = {
         explorer="https://basescan.org",
         getlogs_cap=10000,          # measured family 143b: 10k OK, 50k -> HTTP 400
         drpc_slug="base",
-        # DELIBERATELY MORE CONSERVATIVE THAN ETHEREUM, and the reason is measured: Base's pool is
-        # demonstrably flakier -- mainnet.base.org answered only 5/20 under burst in the endpoint
-        # probe, and the first full A1 Base run logged 18 infrastructure failures across 9,403
-        # calls (0.19%) even at the old 0.35/4 default. Ethereum logged none. 0.10/8 is the
-        # middle setting measured safe there (~693 calls/min, ~3x the old default) and leaves
-        # more headroom on the weaker pool. Revisit only with a Base-specific measurement.
-        min_interval=0.10,
-        concurrency=8,
+        # MEASURED ON BASE, and the measurement OVERTURNED the reasoning that preceded it.
+        # Base's endpoints are flakier, so "be more conservative here" seemed obvious -- and is
+        # wrong. Measured 2026-08-25 on 300 real market reads:
+        #     0.10/8  -> 167 calls/min, 3 failed     <- the "conservative" choice: worst of both
+        #     0.05/12 -> 203 calls/min, 0 failed     <- faster AND cleaner
+        #     0.02/16 -> 232 calls/min, 1 failed
+        # Backing off did not buy reliability, it just spent time. Note Base runs ~5x slower than
+        # Ethereum at EVERY setting (203 vs 946), so the ceiling here is the endpoints themselves,
+        # not our pacing -- a faster Base pool is the only thing that would move it.
+        min_interval=0.05,
+        concurrency=12,
     ),
 }
