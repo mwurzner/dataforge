@@ -15,7 +15,8 @@ name: Ephemeral collector
 # visible in e0_run_manifest -- an ephemeral gap cannot be repaired, so it is recorded rather than
 # hidden.
 #
-# Secrets: DATA_REPO_SSH_KEY only. The ephemeral sources are all free and unauthenticated.
+# Secrets: DATA_REPO_SSH_KEY (deploy key) and HF_TOKEN. The ephemeral SOURCES are all
+# free and unauthenticated -- these secrets are for storage and distribution only.
 
 on:
   schedule:
@@ -81,6 +82,16 @@ jobs:
           fi
           git commit -m "ephemeral: $(date -u +%Y-%m-%dT%H%MZ)"
           git push || (git pull --rebase --autostash && git push)
+
+      - name: Push to HuggingFace
+        # Runs AFTER the git push, never instead of it. An HF outage must not cost an ephemeral
+        # window, so git remains the primary destination and this is additive. hf_push exits 0
+        # even on failure for the same reason: losing a push is recoverable, losing a window is not.
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: SleeveZipper
+        run: python -m src.ops.hf_push
 
       - name: Fail if the collector errored
         if: steps.collect.outcome == 'failure'
