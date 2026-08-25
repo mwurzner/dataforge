@@ -70,6 +70,14 @@ jobs:
           DF_CHECKPOINT_EVERY_S: '1800'
         run: python -m src.ops.longpoll
 
+      - name: Harmonise partition schemas
+        # Collectors gain columns over time, and partitions written before a change keep the old
+        # schema -- which silently makes the dataset un-loadable as a whole (HF's viewer breaks,
+        # load_dataset errors, pd.concat only APPEARS to work). Runs before the push so drift
+        # never reaches the published data. Only ever ADDS null columns; never drops or rewrites.
+        if: always()
+        run: python -m src.ops.harmonise
+
       - name: Commit and push data
         working-directory: data
         run: |

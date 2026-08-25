@@ -63,6 +63,27 @@ PROVIDERS = {
     "blockstream.info": "https://blockstream.info/api",
 }
 
+# OTHER UTXO CHAINS RUNNING THE SAME ESPLORA API. Probed 2026-08-25: litecoinspace.org answers
+# /mempool/txids identically (159 txids, 0.15s), so the collector generalises with a URL swap and
+# no code change. Blockchair covers BCH/Doge/Zcash but caps a mempool listing at 10 rows, so those
+# are NOT collectable free and are excluded rather than half-collected. Liquid answered but its
+# mempool was empty, which is a property of the chain, not a failure.
+#
+# HONEST ON VALUE: Litecoin costs almost nothing to add (10 KB a poll against Bitcoin's 5.8 MB)
+# and is just as un-backfillable, but its audience is far thinner. The reason to collect it is
+# that a CROSS-CHAIN UTXO fee-market panel during a congestion event is something nobody has,
+# and not collecting is the only irreversible choice available.
+CHAINS = {
+    "btc": {"dataset": "e8_btc_mempool_lifecycle",
+            "divergence": "e9_btc_mempool_divergence",
+            "primary": "https://mempool.space/api",
+            "secondary": "https://blockstream.info/api"},
+    "ltc": {"dataset": "e11_ltc_mempool_lifecycle",
+            "divergence": None,          # no second free Litecoin Esplora found; stated, not faked
+            "primary": "https://litecoinspace.org/api",
+            "secondary": None},
+}
+
 BASELINE_POLLS = 3      # union of the first N polls defines "was already here"
 # ABSENT_POLLS IS TUNED FROM MEASUREMENT, and it is the lever that matters. At 3 the primary
 # provider generated ~600 candidates per 10 minutes of which the status endpoint confirmed ~100%
@@ -95,8 +116,12 @@ def _get(url: str, timeout: int = 45):
 class BtcMempoolTracker:
     """Tracks first-seen and fate for every transaction observed entering the mempool."""
 
-    def __init__(self, base: str = PROVIDERS["mempool.space"]) -> None:
+    def __init__(self, base: str = PROVIDERS["mempool.space"],
+                 secondary: str | None = None) -> None:
         self.base = base
+        # Explicit rather than inferred: a chain with no second free provider has NO cross-check,
+        # and that must be visible in the data instead of silently degrading to a weaker claim.
+        self.secondary = secondary
         self.seen: dict[str, float] = {}                 # txid -> first_seen on OUR clock
         self.mined: dict[str, tuple[int, float]] = {}    # txid -> (height, observed_ts)
         self.left: dict[str, float] = {}                 # txid -> when it went absent
@@ -159,7 +184,10 @@ class BtcMempoolTracker:
     def refresh_other(self, base: str | None = None) -> int:
         """One bulk read of a different provider. Cheap per candidate settled."""
         if base is None:
-            base = next(u for n, u in PROVIDERS.items() if u != self.base)
+            base = self.secondary
+        if base is None:
+            return 0                      # no cross-check available on this chain
+
         ids, err = _get(f"{base}/mempool/txids")
         if not isinstance(ids, list):
             self.n_failed += 1
