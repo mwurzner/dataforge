@@ -1,0 +1,72 @@
+name: Daily state snapshot
+
+# TWICE a day, deliberately. These are eth_call reads of contract STATE, and free endpoints do not
+# retain archive depth -- so unlike event data, a missed run is a PERMANENT hole that no later
+# backfill can repair. GitHub states scheduled runs are best-effort and may be delayed or dropped,
+# so a second attempt converts a dropped run from data loss into a non-event.
+#
+# Times are off the top of the hour: GitHub's cron queue is busiest on the hour, a lesson already
+# written into the trading bot's own workflow.
+#
+# Secrets: DATA_REPO_TOKEN only. No RPC key is needed anywhere in this project.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+    - cron: '17 14 * * *'
+  workflow_dispatch:
+
+concurrency:
+  # Never let the 02:17 and 14:17 runs overlap; both write the same dated partition.
+  group: dataforge-daily
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check out private data repo into data/
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/dataforge-data
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily snapshot
+        id: snap
+        continue-on-error: true      # push whatever succeeded before judging the run
+        run: python -m src.ops.daily
+
+      - name: Commit and push data
+        working-directory: data
+        run: |
+          git config user.name "dataforge[bot]"
+          git config user.email "dataforge@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no new partitions"
+          else
+            git commit -m "snapshot: $(date -u +%Y-%m-%d)"
+            git push || (git pull --rebase --autostash && git push)
+          fi
+
+      - name: Gap check
+        run: python -m src.ops.gapcheck
+
+      - name: Fail if the snapshot step failed
+        if: steps.snap.outcome == 'failure'
+        run: |
+          echo "one or more loggers failed -- see the run log above"
+          exit 1

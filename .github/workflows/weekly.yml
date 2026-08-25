@@ -1,0 +1,44 @@
+name: Weekly universe refresh
+
+# The likeliest silent failure of this whole project is a STALE UNIVERSE: loggers keep succeeding
+# while measuring a shrinking sample, and nothing in the output looks wrong. The research record
+# has the cautionary case -- our own notes said Morpho was deployed on 2 chains when it was on 11.
+#
+# Runs BEFORE the Sunday daily job so the week starts on a fresh universe.
+
+on:
+  schedule:
+    - cron: '43 1 * * 0'
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out private data repo into data/
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/dataforge-data
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Discover universe
+        run: python -m src.universe.discover
+      - name: Commit and push universe
+        working-directory: data
+        run: |
+          git config user.name "dataforge[bot]"
+          git config user.email "dataforge@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "universe unchanged"
+          else
+            git commit -m "universe: $(date -u +%Y-%m-%d)"
+            git push || (git pull --rebase --autostash && git push)
+          fi
