@@ -25,7 +25,12 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # RAISED FROM 90 ON MEASUREMENT, not on principle. The last two runs took 76.4 and 69.0
+    # minutes, i.e. 14-21 minutes of headroom, and the universe grows every week as discovery
+    # finds new markets and vaults -- so the job was on track to start timing out on its own.
+    # A state snapshot is backfillable and cheap to lose, but a workflow that fails on schedule
+    # is noise that hides real failures, which is the thing worth avoiding.
+    timeout-minutes: 180
     steps:
       - name: Check out code
         uses: actions/checkout@v4
