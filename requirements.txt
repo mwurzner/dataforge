@@ -4,3 +4,7 @@
 requests>=2.31
 pandas>=2.0
 pyarrow>=14.0
+
+# HuggingFace dataset push. The only dependency added for distribution rather than
+# collection, and the collection path does not import it.
+huggingface_hub>=0.25

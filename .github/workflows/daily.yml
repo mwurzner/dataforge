@@ -8,7 +8,7 @@ name: Daily state snapshot
 # Times are off the top of the hour: GitHub's cron queue is busiest on the hour, a lesson already
 # written into the trading bot's own workflow.
 #
-# Secrets: DATA_REPO_SSH_KEY only (a deploy key scoped to the data repo).
+# Secrets: DATA_REPO_SSH_KEY (deploy key, scoped to the data repo) and HF_TOKEN.
 # No RPC key is needed anywhere in this project -- forward logging reads the chain tip.
 
 on:
@@ -66,6 +66,16 @@ jobs:
             git commit -m "snapshot: $(date -u +%Y-%m-%d)"
             git push || (git pull --rebase --autostash && git push)
           fi
+
+      - name: Push to HuggingFace
+        # Runs AFTER the git push, never instead of it. An HF outage must not cost an ephemeral
+        # window, so git remains the primary destination and this is additive. hf_push exits 0
+        # even on failure for the same reason: losing a push is recoverable, losing a window is not.
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: SleeveZipper
+        run: python -m src.ops.hf_push
 
       - name: Gap check
         run: python -m src.ops.gapcheck
