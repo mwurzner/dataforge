@@ -93,6 +93,24 @@ jobs:
           HF_OWNER: SleeveZipper
         run: python -m src.ops.hf_push
 
+      - name: Prune git to a rolling buffer
+        # The data repo grows ~165 MB/day and GitHub refuses around 5 GB, so without this the
+        # pipeline stops in about five weeks. HuggingFace holds the full history; git keeps the
+        # last 14 days as insurance against an HF outage during a window. Refuses to delete
+        # anything the HF receipt does not confirm was uploaded.
+        if: always()
+        env:
+          DF_GIT_RETAIN_DAYS: '14'
+        run: python -m src.ops.prune_git
+
+      - name: Commit the prune
+        if: always()
+        working-directory: data
+        run: |
+          git add -A
+          git diff --cached --quiet || git commit -m "prune: rolling buffer $(date -u +%Y-%m-%d)"
+          git push || (git pull --rebase --autostash && git push) || true
+
       - name: Fail if the collector errored
         if: steps.collect.outcome == 'failure'
         run: |

@@ -6,8 +6,15 @@ it was dropped and never mined -- and lifecycle is precisely the part no archive
 Actions caps a job at 6 hours, so 5.5h leaves margin, and four staggered starts give ~22h/day of
 coverage.
 
-Everything here is Ethereum-only by measurement, not by omission: Base's txpool_content returns
-ZERO transactions because it runs a centralised sequencer with no public mempool to observe.
+TWO CHAINS, DIFFERENT CLOCKS. Ethereum blocks arrive every ~12s and its mempool turns over in
+seconds, so E1/E3 poll hard (5s). Bitcoin blocks arrive every ~10 min, a full mempool read is
+3.1 MB, and the measured churn is ~327 new transactions/min, so E8/E9 poll every 60s. Running both
+in one process costs nothing extra -- the loop is almost entirely idle waiting on the network.
+
+HONEST NOTE ON WHAT IS WORTH SELLING. E1/E3 (Ethereum) are ALSO published free and CC-0 by the
+Flashbots Mempool Dumpster, with a longer history and a wider node network than ours. They are kept
+because they cost nothing and are a genuine independent measurement, but they are NOT the product.
+E8/E9 (Bitcoin) are the part with no free continuously-updated equivalent found.
 
 OUTPUT IS PARTITIONED BY RUN, not just by date, because there are four runs a day and each is an
 independent observation window. A gap between windows is a real gap and is visible as one.
@@ -24,7 +31,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.ephemeral import e1_mempool, e3_divergence
+from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -32,6 +39,11 @@ DATA = ROOT / "data"
 DURATION_S = int(os.environ.get("DF_DURATION_S", 5 * 3600 + 1800))   # 5.5h
 POLL_S = float(os.environ.get("DF_POLL_S", 5))
 DIVERGENCE_EVERY_S = float(os.environ.get("DF_DIVERGENCE_EVERY_S", 300))
+# Bitcoin cadences. A full txid read is 3.1 MB gzipped, so 60s keeps the job's download to about
+# 1 GB per 5.5h window while still resolving the ~327 new transactions/min that actually arrive.
+BTC_POLL_S = float(os.environ.get("DF_BTC_POLL_S", 60))
+BTC_BLOCK_EVERY_S = float(os.environ.get("DF_BTC_BLOCK_EVERY_S", 120))
+BTC_DIVERGENCE_EVERY_S = float(os.environ.get("DF_BTC_DIVERGENCE_EVERY_S", 900))
 # Checkpoint cadence. A 5.5h job holds its tracker state in memory, so a runner kill would
 # otherwise lose the entire window -- and an ephemeral window cannot be re-collected. Writing
 # every 30 min caps the worst-case loss at 30 minutes instead of 5.5 hours.
@@ -56,25 +68,41 @@ def write(dataset: str, df: pd.DataFrame, run_id: str, quiet: bool = False) -> P
     return p
 
 
+def _checkpoint(run_id: str, tracker, div_rows, btc, btc_div_rows) -> None:
+    """Partial write of everything held in memory. For E1 the fate of anything not yet mined is
+    'unresolved', because reconciliation has not run -- never claim 'dropped' without evidence."""
+    if tracker.seen:
+        write(e1_mempool.DATASET, tracker.frame(set()), run_id, quiet=True)
+    if div_rows:
+        write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True), run_id, quiet=True)
+    if btc.seen or btc.pre_existing:
+        write(e8_btc_mempool.DATASET, btc.frame(), run_id, quiet=True)
+    if btc_div_rows:
+        write(e8_btc_mempool.DIVERGENCE_DATASET,
+              pd.concat(btc_div_rows, ignore_index=True), run_id, quiet=True)
+
+
 def main() -> int:
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
     print(f"DataForge ephemeral run {run_id}", flush=True)
-    print(f"  duration {DURATION_S/3600:.2f}h | mempool poll {POLL_S}s | "
-          f"divergence every {DIVERGENCE_EVERY_S/60:.0f}min\n", flush=True)
+    print(f"  duration {DURATION_S/3600:.2f}h | ETH poll {POLL_S}s | BTC poll {BTC_POLL_S}s\n",
+          flush=True)
 
     tracker = e1_mempool.MempoolTracker(e1_mempool.ENDPOINTS[0])
+    btc = e8_btc_mempool.BtcMempoolTracker()
     div_rows: list[pd.DataFrame] = []
+    btc_div_rows: list[pd.DataFrame] = []
     t0 = time.time()
-    last_block = 0.0
-    last_div = 0.0
-    last_ckpt = 0.0
+    last_block = last_div = last_ckpt = 0.0
+    last_btc = last_btc_block = last_btc_div = 0.0
     failures: list[str] = []
 
     try:
         while time.time() - t0 < DURATION_S:
             tracker.poll_pending()
             now = time.time()
-            if now - last_block >= 12:            # blocks arrive ~12s apart
+
+            if now - last_block >= 12:            # ETH blocks arrive ~12s apart
                 tracker.poll_blocks()
                 last_block = now
             if now - last_div >= DIVERGENCE_EVERY_S:
@@ -83,18 +111,41 @@ def main() -> int:
                 except Exception as exc:
                     failures.append(f"e3: {exc}")
                 last_div = now
-            if now - last_ckpt >= CHECKPOINT_EVERY_S and tracker.seen:
-                # Partial write. fate is "unresolved" for anything not yet mined, because
-                # reconciliation has not run -- never claim "dropped" without the evidence.
-                write(e1_mempool.DATASET, tracker.frame(set()), run_id, quiet=True)
-                if div_rows:
-                    write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True),
-                          run_id, quiet=True)
+
+            # ---- Bitcoin, on its own much slower clock ----
+            if now - last_btc >= BTC_POLL_S:
+                try:
+                    btc.poll_pool()
+                except Exception as exc:
+                    failures.append(f"e8 pool: {exc}")
+                last_btc = now
+            if now - last_btc_block >= BTC_BLOCK_EVERY_S:
+                try:
+                    btc.poll_blocks()
+                except Exception as exc:
+                    failures.append(f"e8 blocks: {exc}")
+                last_btc_block = now
+                # Spend idle time verifying drop candidates a few at a time, so the final
+                # reconciliation is not a burst of thousands of requests.
+                try:
+                    btc.verify_dropped(cap=40)
+                except Exception as exc:
+                    failures.append(f"e8 verify: {exc}")
+            if now - last_btc_div >= BTC_DIVERGENCE_EVERY_S:
+                try:
+                    btc_div_rows.append(e8_btc_mempool.divergence())
+                except Exception as exc:
+                    failures.append(f"e9: {exc}")
+                last_btc_div = now
+
+            if now - last_ckpt >= CHECKPOINT_EVERY_S:
+                _checkpoint(run_id, tracker, div_rows, btc, btc_div_rows)
                 last_ckpt = now
             if tracker.n_poll % 240 == 0 and tracker.n_poll:
-                print(f"    {(now-t0)/60:6.1f} min  seen {len(tracker.seen):>8,}  "
-                      f"mined {len(tracker.mined):>8,}  failed {tracker.n_failed:>4}  "
-                      f"resets {tracker.n_filter_resets}", flush=True)
+                print(f"    {(now-t0)/60:6.1f} min  ETH seen {len(tracker.seen):>8,} "
+                      f"mined {len(tracker.mined):>8,} failed {tracker.n_failed:>4}  |  "
+                      f"BTC seen {len(btc.seen):>7,} mined {len(btc.mined):>7,} "
+                      f"polls {btc.n_poll:>4} failed {btc.n_failed}", flush=True)
             time.sleep(POLL_S)
     except KeyboardInterrupt:
         print("\n  interrupted -- reconciling what was collected", flush=True)
@@ -107,6 +158,14 @@ def main() -> int:
     except Exception as exc:
         failures.append(f"reconcile: {exc}")
         still = set()
+    try:
+        btc.poll_pool()
+        btc.poll_blocks()
+        # Authoritative check on every drop candidate. A set-difference alone manufactured 642
+        # fake drops in a 200s test; all 12 sampled were still pending.
+        btc.verify_dropped()
+    except Exception as exc:
+        failures.append(f"e8 final: {exc}")
 
     df = tracker.frame(still)
     print(f"\n  E1: {len(df):,} txs | " +
@@ -117,6 +176,17 @@ def main() -> int:
     if div_rows:
         write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True), run_id)
 
+    bdf = btc.frame()
+    if len(bdf):
+        print(f"  E8: {len(bdf):,} txs | " +
+              " ".join(f"{k} {v:,}" for k, v in bdf["fate"].value_counts().items()) +
+              f" | pre_existing {int(bdf['pre_existing'].sum()):,} "
+              f"polls {btc.n_poll:,} failed {btc.n_failed}", flush=True)
+    write(e8_btc_mempool.DATASET, bdf, run_id)
+    if btc_div_rows:
+        write(e8_btc_mempool.DIVERGENCE_DATASET,
+              pd.concat(btc_div_rows, ignore_index=True), run_id)
+
     # Run-level telemetry, so a degraded run is visible without opening the data.
     write("e0_run_manifest", pd.DataFrame([{
         "started_utc": datetime.fromtimestamp(t0, timezone.utc).isoformat(timespec="seconds"),
@@ -124,12 +194,17 @@ def main() -> int:
         "n_polls": tracker.n_poll, "n_failed_calls": tracker.n_failed,
         "n_filter_resets": tracker.n_filter_resets,
         "n_tx_seen": len(df), "n_divergence_samples": len(div_rows),
+        "btc_n_polls": btc.n_poll, "btc_n_failed": btc.n_failed,
+        "btc_n_tx_seen": len(bdf), "btc_n_pre_existing": int(bdf["pre_existing"].sum())
+                                    if len(bdf) else 0,
+        "btc_n_divergence_samples": len(btc_div_rows),
+        "btc_n_drop_verified": btc.n_verified, "btc_n_flicker": btc.n_flicker,
         "reconciled": bool(still), "failures": "; ".join(failures)[:500],
     }]), run_id)
 
     if failures:
         print("\nFAILURES:", flush=True)
-        for f in failures:
+        for f in failures[:20]:
             print("  " + f, flush=True)
     return 0
 
