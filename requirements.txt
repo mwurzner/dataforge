@@ -1,0 +1,6 @@
+# Deliberately minimal. The loggers are raw batched JSON-RPC over `requests`; no web3.py, and no
+# eth-utils/eth-hash, because keccak is pure Python here (src/chain/keccak.py). Fewer compiled
+# dependencies means fewer ways for an unattended runner to fail to install.
+requests>=2.31
+pandas>=2.0
+pyarrow>=14.0

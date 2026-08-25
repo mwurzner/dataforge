@@ -1,0 +1,26 @@
+# Secrets: never commit. This project needs NO RPC key -- forward logging reads the chain tip,
+# which every free public endpoint serves -- so the only secrets are the data-repo deploy key and
+# the storefront token, both of which live in GitHub Secrets and never on disk.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# The collected panels are pushed to the PRIVATE data repo, not committed here. This repo is
+# public so that Actions minutes are free; publishing the code costs nothing, because a copier
+# still starts accumulating from today while we already hold history.
+data/*
+!data/.gitkeep
+
+# Built products. `dist/` holds BOTH the free rolling sample and the FULL PAID SNAPSHOT. This
+# repo is PUBLIC, so committing dist/ would publish the paid product and destroy the only thing
+# being sold. Products are built fresh by src/ops/publish.py and uploaded to the storefront;
+# they are never version-controlled here.
+dist/
