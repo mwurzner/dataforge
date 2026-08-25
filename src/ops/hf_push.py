@@ -45,7 +45,8 @@ SAMPLE_REPO = f"{OWNER}/dataforge-sample"
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 
 # Datasets whose partitions are named by RUN (ephemeral) or by DATE (state panels).
-DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
+DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
+            "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
             "e10_quote_benchmark",
             "a1_lending_market_state", "a2_vault_state",
@@ -54,7 +55,8 @@ DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
 # The rolling window applies ONLY to the sets whose accumulated history is the thing being held
 # back. Windowing the state panels would withhold nothing (they are freely backfillable) while
 # making the public repo less useful, so they go out at full history.
-EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
+EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
+             "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
              "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
              "e10_quote_benchmark"}
 
@@ -80,7 +82,7 @@ We would rather say this plainly than let a user discover it.
 | dataset | scarce? |
 |---|---|
 | `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | **Yes.** No continuously-updated free per-transaction Bitcoin mempool archive was found. The public Bitcoin tools publish mempool *size*, not per-transaction lifecycle; the one per-transaction dataset we located covers a fixed Dec 2020 - Feb 2021 window. |
-| `e1_mempool_lifecycle`, `e3_mempool_divergence` | **No.** The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, free and CC-0, since September 2023, with a wider node network than ours. Use theirs. Ours is published as an independent second observation, nothing more. |
+| `e1_mempool_*`, `e3_mempool_divergence` | **No.** The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, free and CC-0, since September 2023, with a wider node network than ours. Use theirs. Ours is published as an independent second observation, nothing more. |
 | `a1_*`, `a2_*`, `b2_*`, `b5_*` | **No.** Free archive endpoints serve the same contract state back years; verified at -90d, -360d and -720d on two independent endpoints. Convenience only. |
 
 ## Why mempool timing cannot be reconstructed later
@@ -96,7 +98,9 @@ Transactions that are never mined leave no trace in any archive at all.
 |---|---|
 | `e8_btc_mempool_lifecycle` | per-transaction first-seen, mined height, dwell seconds, and fate |
 | `e9_btc_mempool_divergence` | pending-set size and overlap across independent Bitcoin providers |
-| `e1_mempool_lifecycle` | the same for Ethereum |
+| `e1_mempool_minutely` | Ethereum, per-minute: arrivals, fate counts, dwell p10/p50/p90 |
+| `e1_mempool_dropped` | Ethereum, full rows for transactions that were never mined |
+| `e1_mempool_lifecycle` | Ethereum per-transaction (historical; superseded by the two above) |
 | `e3_mempool_divergence` | pending-set size and overlap across four Ethereum nodes |
 | `e0_run_manifest` | per-run telemetry: polls, failed calls, coverage |
 | `a1_lending_market_state` | Morpho Blue market state (supply, borrow, utilisation, fee) |
@@ -126,6 +130,10 @@ Documented because each has silently corrupted a real analysis:
   days, against Ethereum dwell times of seconds to minutes. Bitcoin carries a large standing
   backlog of fee-starved transactions; this is a real property, not a collection error.
 - **Base has no public mempool.** It runs a centralised sequencer, so there is nothing to observe.
+- **Ethereum is stored as per-minute aggregates from 2026-08-25.** Per-transaction rows were 85%
+  of this project's entire storage for the one dataset that is freely available elsewhere, so E1
+  now keeps a minute-level distribution plus full rows for the never-mined transactions. If you
+  want per-transaction Ethereum data, the Flashbots Dumpster is better than ours was and free.
 
 ## Coverage
 

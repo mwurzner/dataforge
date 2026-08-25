@@ -12,9 +12,16 @@ seconds, so E1/E3 poll hard (5s). Bitcoin blocks arrive every ~10 min, a full me
 in one process costs nothing extra -- the loop is almost entirely idle waiting on the network.
 
 HONEST NOTE ON WHAT IS WORTH SELLING. E1/E3 (Ethereum) are ALSO published free and CC-0 by the
-Flashbots Mempool Dumpster, with a longer history and a wider node network than ours. They are kept
-because they cost nothing and are a genuine independent measurement, but they are NOT the product.
-E8/E9 (Bitcoin) are the part with no free continuously-updated equivalent found.
+Flashbots Mempool Dumpster, with a longer history and a wider node network than ours, so they are
+NOT the product. E8/E9 (Bitcoin) are the part with no free continuously-updated equivalent.
+
+AND "THEY COST NOTHING" WAS WRONG -- an earlier version of this file said exactly that. Measured:
+E1 is 135 MB of the 158 MB/day this project writes, i.e. 85% of all storage, which exhausts the
+100 GB free tier in 1.7 years. Aggregating E1 to per-minute rows (keeping full rows only for the
+never-mined transactions, which exist nowhere else) extends that to 11.7 years and leaves the
+headroom for Bitcoin. The independent-observation value survives, because what a second observer
+actually contributes is a dwell DISTRIBUTION to disagree with, not duplicate transaction bodies
+that are on-chain forever anyway.
 
 OUTPUT IS PARTITIONED BY RUN, not just by date, because there are four runs a day and each is an
 independent observation window. A gap between windows is a real gap and is visible as one.
@@ -51,6 +58,13 @@ QUOTE_EVERY_S = float(os.environ.get("DF_QUOTE_EVERY_S", 900))
 # otherwise lose the entire window -- and an ephemeral window cannot be re-collected. Writing
 # every 30 min caps the worst-case loss at 30 minutes instead of 5.5 hours.
 CHECKPOINT_EVERY_S = float(os.environ.get("DF_CHECKPOINT_EVERY_S", 1800))
+# E1 STORAGE MODE. "aggregate" (default) stores a per-minute summary plus full rows for the
+# never-mined transactions, instead of a row per transaction. E1 is 85% of everything this
+# project stores AND is the one dataset established as NOT scarce -- Flashbots publishes the same
+# measurement free and CC-0 from a wider network. Per-transaction rows exhaust the 100 GB free
+# tier in 1.7 years; aggregating extends it to 11.7 and leaves the room for Bitcoin, which has no
+# free equivalent. Set DF_E1_MODE=full to restore per-transaction storage.
+E1_MODE = os.environ.get("DF_E1_MODE", "aggregate").lower()
 
 
 def write(dataset: str, df: pd.DataFrame, run_id: str, quiet: bool = False) -> Path | None:
@@ -75,7 +89,12 @@ def _checkpoint(run_id: str, tracker, div_rows, btc, btc_div_rows, quote_rows=()
     """Partial write of everything held in memory. For E1 the fate of anything not yet mined is
     'unresolved', because reconciliation has not run -- never claim 'dropped' without evidence."""
     if tracker.seen:
-        write(e1_mempool.DATASET, tracker.frame(set()), run_id, quiet=True)
+        f = tracker.frame(set())
+        if E1_MODE == "full":
+            write(e1_mempool.DATASET, f, run_id, quiet=True)
+        else:
+            write("e1_mempool_minutely", e1_mempool.aggregate(f), run_id, quiet=True)
+            write("e1_mempool_dropped", e1_mempool.keep_dropped(f), run_id, quiet=True)
     if div_rows:
         write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True), run_id, quiet=True)
     if btc.seen or btc.pre_existing:
@@ -194,7 +213,19 @@ def main() -> int:
           f"failed {tracker.n_failed} resets {tracker.n_filter_resets}", flush=True)
     if not len(df):
         failures.append("e1: collected zero transactions -- endpoint or filter failure")
-    write(e1_mempool.DATASET, df, run_id)
+    if E1_MODE == "full":
+        write(e1_mempool.DATASET, df, run_id)
+    else:
+        # NEW DATASET NAMES on purpose. Reusing e1_mempool_lifecycle for a dropped-only subset
+        # would silently change what an existing name means, and anyone joining old partitions to
+        # new ones would get a population change disguised as a trend.
+        agg = e1_mempool.aggregate(df)
+        drp = e1_mempool.keep_dropped(df)
+        write("e1_mempool_minutely", agg, run_id)
+        write("e1_mempool_dropped", drp, run_id)
+        if len(df):
+            print(f"       stored as {len(agg):,} minute rows + {len(drp):,} dropped rows "
+                  f"instead of {len(df):,} per-tx rows", flush=True)
     if div_rows:
         write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True), run_id)
 

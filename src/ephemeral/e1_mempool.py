@@ -211,3 +211,58 @@ def run(duration_s: int, poll_s: float, runlog=None) -> pd.DataFrame:
           f"still_pending {(df['fate']=='still_pending').sum():,}  "
           f"polls {t.n_poll:,}  failed {t.n_failed}  filter_resets {t.n_filter_resets}", flush=True)
     return df
+
+# ---------------------------------------------------------------------------- storage mode
+def aggregate(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Per-minute summary of an E1 frame, ~1% of the per-transaction volume.
+
+    WHY THIS IS THE DEFAULT. E1 is 85% of everything DataForge stores (135 MB/day of 158) and it
+    is the one dataset we have established is NOT scarce: the Flashbots Mempool Dumpster publishes
+    the same measurement daily, free and CC-0, since Sept 2023, from a wider node network and at
+    millisecond precision. Spending 85% of a 100 GB ceiling on a worse copy of free data starves
+    the Bitcoin panel, which is the part with no equivalent -- keeping per-transaction rows
+    exhausts the free tier in 1.7 years, aggregating extends it to 11.7.
+
+    WHAT IS KEPT, and why it is the right 1%. The per-minute dwell DISTRIBUTION is what an
+    independent second observer actually contributes -- if our vantage disagrees with Flashbots'
+    about how long transactions waited, that is visible here and is the only reason to run a
+    second observer at all. Individual mined transactions add nothing: their bodies are on-chain
+    forever and Flashbots already has their timing.
+
+    DROPPED TRANSACTIONS ARE EXEMPT and keep their full rows (see keep_dropped below). Those are
+    the ones that exist nowhere else, they are a few hundred per run, and aggregating away the
+    rarest rows to save kilobytes would be the wrong trade.
+    """
+    import pandas as pd
+    if df is None or not len(df):
+        return pd.DataFrame()
+    d = df.copy()
+    d["minute_ts"] = (d["first_seen_ts"] // 60 * 60)
+    # Dwell is only trustworthy where the block was observed at the head (see poll_blocks).
+    fresh = d[(d["lag_blocks"] == 0) & d["dwell_seconds_local"].notna()]
+    g = d.groupby("minute_ts", dropna=True)
+    out = pd.DataFrame({
+        "n_first_seen": g.size(),
+        "n_mined": g["fate"].apply(lambda x: (x == "mined").sum()),
+        "n_dropped": g["fate"].apply(lambda x: (x == "dropped").sum()),
+        "n_still_pending": g["fate"].apply(lambda x: (x == "still_pending").sum()),
+        "n_unresolved": g["fate"].apply(lambda x: (x == "unresolved").sum()),
+    })
+    if len(fresh):
+        fg = fresh.groupby("minute_ts")["dwell_seconds_local"]
+        q = fg.quantile([0.1, 0.5, 0.9]).unstack()
+        out["n_dwell_measurable"] = fg.size()
+        out["dwell_p10"] = q[0.1]
+        out["dwell_p50"] = q[0.5]
+        out["dwell_p90"] = q[0.9]
+        out["dwell_max"] = fg.max()
+    return out.reset_index()
+
+
+def keep_dropped(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Full rows for transactions that were never mined -- the only E1 rows with no equivalent
+    anywhere, and small enough that keeping them costs nothing."""
+    if df is None or not len(df):
+        import pandas as pd
+        return pd.DataFrame()
+    return df[df["fate"].isin(["dropped", "unresolved"])].copy()
