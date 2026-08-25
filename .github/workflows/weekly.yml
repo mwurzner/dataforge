@@ -21,7 +21,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/dataforge-data
-          token: ${{ secrets.DATA_REPO_TOKEN }}
+          # A DEPLOY KEY scoped to this one repo, not a personal access token. A PAT would carry
+          # the owner's rights across every repo they own; this key can write to dataforge-data
+          # and nothing else. It is also the only secret this project needs -- the loggers read
+          # the chain tip from free public endpoints, so there is no RPC key to leak.
+          ssh-key: ${{ secrets.DATA_REPO_SSH_KEY }}
           path: data
       - uses: actions/setup-python@v5
         with:
