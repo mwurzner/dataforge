@@ -22,9 +22,16 @@ MEASURED DISPERSION, 2026-08-25, WETH->USDC on mainnet:
     10      2,466.91    2,472.99    2,472.89   24.6 bps   KyberSwap
     100     2,467.14    2,473.32    2,472.81   25.0 bps   KyberSwap
     500     2,464.56    2,468.02    2,472.46   32.0 bps   CoW
-THE WINNER CHANGES WITH SIZE. That crossover -- where batch-auction matching starts beating
-conventional routing -- is worth real money at institutional size (25 bps on $1M is $2,500) and
-is precisely what a single snapshot cannot tell you and a time series can.
+THE WINNER CHANGES WITH SIZE, which is the interesting part.
+
+BUT MOST OF THAT GAP IS A FEE, NOT ROUTING -- caught before it became the headline. LI.FI applies
+a "LIFI Fixed Fee" of exactly 25.0 bps ($6.18 on 1 WETH, $617.63 on 100 WETH), so its apparent
+underperformance is its own take rate. Ex-fee it quotes 2,470.00 against KyberSwap's ~2,474, and
+true ROUTING dispersion between the three is far smaller than the 24-37 bps headline implies.
+Both readings are legitimate and they answer different questions -- what a user actually receives
+through the public endpoint (fee included, dispersion large) versus which router finds the better
+path (fee excluded, dispersion small) -- so the panel records the fee separately and never blends
+them into one number.
 
 HONEST LIMITS, stated up front rather than discovered by a buyer:
   * QUOTES ARE NOT FILLS. Realised execution differs through slippage, MEV and reverts. This
@@ -82,7 +89,13 @@ def _lifi(sell, buy, amt):
     if e:
         return None, e
     try:
-        return int(d["estimate"]["toAmount"]), None
+        est = d["estimate"]
+        # THE FEE MUST BE SEPARATED FROM THE ROUTE. LI.FI applies a "LIFI Fixed Fee" of 25 bps
+        # (measured: $6.18 on 1 WETH, $617.63 on 100 WETH -- 25.0 bps both times). Reporting only
+        # the net output makes a FEE POLICY look like bad routing, which is what the first version
+        # of this module did.
+        fee_usd = sum(float(c.get("amountUSD") or 0) for c in est.get("feeCosts", []))
+        return int(est["toAmount"]), None, {"fee_usd": fee_usd, "tool": d.get("tool")}
     except Exception:
         return None, "unparsable"
 
@@ -93,7 +106,8 @@ def _kyber(sell, buy, amt):
     if e:
         return None, e
     try:
-        return int(d["data"]["routeSummary"]["amountOut"]), None
+        rs = d["data"]["routeSummary"]
+        return int(rs["amountOut"]), None, {"fee_usd": 0.0, "tool": "kyberswap"}
     except Exception:
         return None, "unparsable"
 
@@ -105,7 +119,11 @@ def _cow(sell, buy, amt):
     if e:
         return None, e
     try:
-        return int(d["quote"]["buyAmount"]), None
+        q = d["quote"]
+        # CoW deducts its fee from the SELL side, so buyAmount is already net of it. Recorded in
+        # sell-token units, which is not directly comparable to LI.FI's USD figure -- hence the
+        # separate column rather than a single "fee" number that would silently mix units.
+        return int(q["buyAmount"]), None, {"fee_sell_raw": q.get("feeAmount"), "tool": "cow"}
     except Exception:
         return None, "unparsable"
 
@@ -125,7 +143,9 @@ def sample() -> pd.DataFrame:
             amt = int(size * 10 ** sdec)
             for pname, fn in PROVIDERS.items():
                 t0 = time.time()
-                out, err = fn(sell, buy, amt)
+                res = fn(sell, buy, amt)
+                out, err = res[0], res[1]
+                meta = res[2] if len(res) > 2 and isinstance(res[2], dict) else {}
                 rows.append({
                     "quoted_ts": t0,
                     "pair": f"{sell_sym}/{buy_sym}",
@@ -138,6 +158,11 @@ def sample() -> pd.DataFrame:
                     "price": (out / 10 ** bdec) / size if out else None,
                     "latency_s": round(time.time() - t0, 3),
                     "error": err,
+                    # Provider fee, so a fee POLICY is never mistaken for routing quality.
+                    "fee_usd": meta.get("fee_usd"),
+                    "fee_sell_raw": (str(meta["fee_sell_raw"])
+                                     if meta.get("fee_sell_raw") is not None else None),
+                    "route_tool": meta.get("tool"),
                 })
                 time.sleep(0.25)          # be a polite client of a free service
     df = pd.DataFrame(rows)
