@@ -64,7 +64,14 @@ PROVIDERS = {
 }
 
 BASELINE_POLLS = 3      # union of the first N polls defines "was already here"
-ABSENT_POLLS = 3        # consecutive absences before a transaction is even a candidate
+# ABSENT_POLLS IS TUNED FROM MEASUREMENT, and it is the lever that matters. At 3 the primary
+# provider generated ~600 candidates per 10 minutes of which the status endpoint confirmed ~100%
+# were still pending -- roughly 60 phantoms a minute, which no per-transaction verification budget
+# can absorb over a 5.5h run. Flicker returns within a poll or two; a genuine drop (RBF
+# replacement, or eviction after Bitcoin Core's 336h) never comes back. So requiring TEN
+# consecutive absences -- ten minutes at the production cadence -- separates them almost for free,
+# where verification was paying per candidate to learn the same thing.
+ABSENT_POLLS = 10
 VERIFY_CAP = 1500       # authoritative status checks per run; the rest stay `unresolved`
 
 
@@ -104,6 +111,14 @@ class BtcMempoolTracker:
         self.n_failed = 0
         self.n_verified = 0
         self.n_flicker = 0          # candidates the status check proved were never gone
+        # A SECOND PROVIDER'S POOL, refreshed in bulk. Measured flicker on the primary was 685 of
+        # 685 -- roughly 98 spurious candidates a minute -- while per-transaction status checks
+        # clear only ~20/min, so verification could never keep up and most rows would end
+        # `unresolved`. One 3 MB bulk read of an INDEPENDENT provider settles thousands at once:
+        # a transaction still sitting in another node's pool is definitively not dropped.
+        self.other: set[str] = set()
+        self.other_ts = 0.0
+        self.n_other_saved = 0      # candidates killed by the cross-check, costing no status call
 
     def poll_pool(self) -> tuple[int, int]:
         """One full mempool read, diffed against the last. Returns (new, newly-absent)."""
@@ -140,6 +155,18 @@ class BtcMempoolTracker:
                 newly_absent += 1
         self.pool = cur
         return len(new), newly_absent
+
+    def refresh_other(self, base: str | None = None) -> int:
+        """One bulk read of a different provider. Cheap per candidate settled."""
+        if base is None:
+            base = next(u for n, u in PROVIDERS.items() if u != self.base)
+        ids, err = _get(f"{base}/mempool/txids")
+        if not isinstance(ids, list):
+            self.n_failed += 1
+            return 0
+        self.other = set(ids)
+        self.other_ts = time.time()
+        return len(self.other)
 
     def poll_blocks(self) -> int:
         """Mark txids mined. Bitcoin blocks arrive ~every 10 min, so this is cheap."""
@@ -182,6 +209,18 @@ class BtcMempoolTracker:
             self._verdict = {}
         checked = self._verdict
         cand = [t for t in self.left if t not in self.mined and t not in checked]
+        # SECOND-PROVIDER GATE. Kept, but MEASURED AS WEAK and worth saying so: it cleared only 6
+        # of 600 candidates in a 10-minute test, because our own e9 data shows mempool.space is
+        # very nearly a superset of blockstream.info (5,150 unique versus 205 at the same instant).
+        # A transaction absent from the larger pool is almost always absent from the smaller one,
+        # so this settles the rare case where the primary is the one at fault, and no more.
+        if self.other:
+            still_elsewhere = [t for t in cand if t in self.other]
+            for t in still_elsewhere:
+                checked[t] = "flicker"
+                self.n_flicker += 1
+                self.n_other_saved += 1
+            cand = [t for t in cand if t not in self.other]
         for t in cand[:cap]:
             st, err = _get(f"{self.base}/tx/{t}/status", timeout=20)
             if not isinstance(st, dict):
