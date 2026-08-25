@@ -67,7 +67,8 @@ class MempoolTracker:
         self.url = url
         self.filter_id: str | None = None
         self.seen: dict[str, float] = {}          # hash -> first_seen unix
-        self.mined: dict[str, tuple[int, int]] = {}   # hash -> (block, block_ts)
+        # hash -> (block, proposer_ts, local_observed_ts, lag_blocks)
+        self.mined: dict[str, tuple[int, int, float, int]] = {}
         self.last_block = 0
         self.n_poll = 0
         self.n_failed = 0
@@ -124,9 +125,17 @@ class MempoolTracker:
                 self.n_failed += 1
                 continue
             ts = int(blk["timestamp"], 16)
+            # WHY A SECOND TIMESTAMP. `ts` is the PROPOSER's clock, written into the block by
+            # whoever built it -- it is not when WE learned the transaction was mined, and the
+            # two differ by proposer clock skew plus propagation. first_seen is on OUR clock, so
+            # subtracting the proposer's timestamp from it mixes two clocks. lag_blocks records
+            # how far behind the head this block was when fetched: at lag 0 the local stamp is
+            # fresh to within one poll, and above 0 it is late by roughly 12s per block.
+            obs = time.time()
+            lag = head - n
             for h in blk.get("transactions", []):
                 if h in self.seen and h not in self.mined:
-                    self.mined[h] = (n, ts)
+                    self.mined[h] = (n, ts, obs, lag)
                     marked += 1
             self.last_block = n
         return marked
@@ -151,22 +160,28 @@ class MempoolTracker:
     def frame(self, still_pending: set[str]) -> pd.DataFrame:
         rows = []
         for h, first in self.seen.items():
-            mb, mts = self.mined.get(h, (None, None))
+            mb, mts, obs, lag = self.mined.get(h, (None, None, None, None))
+            dwell = dwell_local = None
             if mb is not None:
                 fate = "mined"
-                dwell = max(mts - first, 0.0) if mts else None
+                # PROPOSER-CLOCK dwell: comparable to on-chain data, but mixes two clocks.
+                if mts:
+                    dwell = max(mts - first, 0.0)
+                # LOCAL-CLOCK dwell: both ends measured by this observer, so it is internally
+                # consistent. Trust it only where lag_blocks == 0; above that it is late.
+                if obs:
+                    dwell_local = max(obs - first, 0.0)
             elif h in still_pending:
                 fate = "still_pending"
-                dwell = None
             elif still_pending:
                 fate = "dropped"          # confirmed absent from the pool AND never mined
-                dwell = None
             else:
                 fate = "unresolved"       # reconciliation itself failed; do not claim "dropped"
-                dwell = None
             rows.append({"tx_hash": h, "first_seen_ts": first,
                          "mined_block": mb, "mined_ts": mts,
-                         "dwell_seconds": dwell, "fate": fate})
+                         "block_observed_ts": obs, "lag_blocks": lag,
+                         "dwell_seconds": dwell, "dwell_seconds_local": dwell_local,
+                         "fate": fate})
         return pd.DataFrame(rows)
 
 

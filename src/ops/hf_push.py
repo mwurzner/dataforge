@@ -31,12 +31,21 @@ DATA = ROOT / "data"
 OWNER = os.environ.get("HF_OWNER", "SleeveZipper")
 FULL_REPO = f"{OWNER}/dataforge-ephemeral"
 SAMPLE_REPO = f"{OWNER}/dataforge-sample"
-SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 30))
+SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 
 # Datasets whose partitions are named by RUN (ephemeral) or by DATE (state panels).
 DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence",
             "a1_lending_market_state", "a2_vault_state",
             "b2_stuck_markets", "b5_dormancy", "universe"]
+
+# THE SPLIT IS THE PRODUCT, and it follows what is actually SCARCE rather than what was
+# expensive to collect. The e* datasets capture facts no archive retains -- a transaction's
+# first-seen time, and which transactions vanished -- so withholding the accumulated history is
+# the only thing being sold. The a*/b* panels are NOT scarce: free archive endpoints serve the
+# same contract state back years (verified at -90d, -360d and -720d on two independent
+# endpoints), so windowing them would withhold nothing while making the public repo less useful.
+# They therefore go out at FULL history, and the rolling window applies to e* alone.
+EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle", "e3_mempool_divergence"}
 
 CARD = """---
 license: odc-by
@@ -82,7 +91,21 @@ So this dataset captures the two facts the chain will never hold:
 | `b5_dormancy` | vaults whose share price did not move -- dormant vs unobserved |
 
 The `a*` and `b*` panels are convenience, not scarcity: the same state is obtainable from archive
-nodes. Only the `e*` datasets are genuinely un-backfillable.
+nodes, and they are published here at **full history** for that reason. Only the `e*` datasets are
+genuinely un-backfillable, and the public repo carries a **rolling recent window** of those while
+the full accumulated series is held back.
+
+## Two dwell measurements, and why
+
+`dwell_seconds` subtracts the transaction's first-seen time (our clock) from the block's
+`timestamp` field (the **proposer's** clock). Those are different clocks, and they differ by
+proposer skew plus propagation, so the figure is comparable to on-chain data and not internally
+consistent.
+
+`dwell_seconds_local` uses the time **we** observed the block instead, so both ends come from one
+clock. It is accurate to within one poll interval when `lag_blocks == 0`, and late by roughly 12
+seconds per block above that (the collector catches up to 12 blocks at a time after a stall).
+Filter on `lag_blocks == 0` for timing work.
 
 ## Known artifacts
 
@@ -122,7 +145,7 @@ def _stage(target: Path, since: date | None) -> dict:
     summary = {}
     for ds in DATASETS:
         files = _partitions(ds)
-        if since is not None:
+        if since is not None and ds in EPHEMERAL:
             # Partition stems are either YYYY-MM-DD or YYYY-MM-DDTHHMMZ; both sort by date.
             files = [f for f in files if f.stem[:10] >= since.isoformat()]
         if not files:
