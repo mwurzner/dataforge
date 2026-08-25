@@ -1,0 +1,89 @@
+name: Ephemeral collector
+
+# THE ONLY DATA IN THIS PROJECT THAT IS GENUINELY UN-BACKFILLABLE.
+#
+# Phase 1 collects contract state, and that premise turned out to be false: free endpoints serve
+# historical state to -720d, so all of it is retroactively obtainable. Pending transactions are
+# not. They are gossiped on the p2p network and either get mined -- at which point the body
+# becomes permanent but the TIMING does not -- or they vanish leaving no trace in any archive.
+#
+# RESIDENT, NOT CRON-SAMPLED. A sparse snapshot cannot see lifecycle: how long a transaction sat
+# pending, or that it was dropped. So each job polls continuously for ~5.5h. Actions caps a job at
+# 6h, so 5.5h leaves margin for setup and the final reconciliation read.
+#
+# FOUR STARTS AT 6h INTERVALS give ~22h/day coverage with ~30min gaps. The gaps are real and are
+# visible in e0_run_manifest -- an ephemeral gap cannot be repaired, so it is recorded rather than
+# hidden.
+#
+# Secrets: DATA_REPO_SSH_KEY only. The ephemeral sources are all free and unauthenticated.
+
+on:
+  schedule:
+    - cron: '7 0 * * *'
+    - cron: '7 6 * * *'
+    - cron: '7 12 * * *'
+    - cron: '7 18 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_s:
+        description: 'Run duration in seconds (default 19800 = 5.5h)'
+        required: false
+        default: '19800'
+
+concurrency:
+  # Windows must not overlap: two collectors would double-write the same run partition and
+  # double-count the mempool.
+  group: dataforge-ephemeral
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350        # 5h50m: the 5.5h loop plus setup, reconciliation and push
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check out private data repo into data/
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/dataforge-data
+          ssh-key: ${{ secrets.DATA_REPO_SSH_KEY }}
+          path: data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Collect
+        id: collect
+        continue-on-error: true      # always push what was collected before judging the run
+        env:
+          DF_DURATION_S: ${{ github.event.inputs.duration_s || '19800' }}
+          DF_POLL_S: '5'
+          DF_DIVERGENCE_EVERY_S: '300'
+          DF_CHECKPOINT_EVERY_S: '1800'
+        run: python -m src.ops.longpoll
+
+      - name: Commit and push data
+        working-directory: data
+        run: |
+          git config user.name "dataforge[bot]"
+          git config user.email "dataforge@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no new partitions -- the collector wrote nothing, which is itself a failure"
+            exit 1
+          fi
+          git commit -m "ephemeral: $(date -u +%Y-%m-%dT%H%MZ)"
+          git push || (git pull --rebase --autostash && git push)
+
+      - name: Fail if the collector errored
+        if: steps.collect.outcome == 'failure'
+        run: |
+          echo "collector reported failures -- data above was still pushed"
+          exit 1
