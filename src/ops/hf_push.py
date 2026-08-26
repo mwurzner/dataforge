@@ -95,7 +95,7 @@ discussion here if you want access.
 | `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | Not that we could find. Public Bitcoin mempool tools (Johoe, Bitcoin Visuals, blockchain.com) publish aggregate queue size, not per-transaction lifecycle. The one per-transaction dataset we located covers Dec 2020 to Feb 2021 only. |
 | `e1_*`, `e3_mempool_divergence` (Ethereum) | Yes. The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, CC-0, since September 2023, from a wider node network. Use theirs; ours is an independent second observation. |
 | `e10_quote_benchmark`, `e12_onramp_quotes`, `e13_remittance_quotes` | The live quotes are free to anyone at the moment they ask; a recorded time series was not found anywhere. On-ramp comparisons that exist are one-off blog snapshots of advertised fee schedules, not effective rates over time. |
-| `e14_l2_preconf` | A replaced unsafe block is served by no archive; the promise is only observable before it breaks. No monitoring dataset of this was found. |
+| `e14_l2_preconf` | Partly. The `violation` rows are scarce (a replaced unsafe block is served by no archive). The `heartbeat` lag is **not**: L2 block timestamps and L1 batch times are both permanent, so the lag series can be rebuilt afterwards. Treat the heartbeats as coverage attestation, not as a scarce series. |
 | `a1_*`, `a2_*`, `b2_*`, `b5_*` (contract state) | Yes. Free archive nodes serve the same state years back; we checked at -90d, -360d and -720d on two endpoints. Kept for convenience. |
 
 ## Datasets
@@ -159,6 +159,10 @@ Read these before building on the data. Each one exists because it bit us first.
 - Quote rows record what each aggregator served, not what was fillable. One captured round has
   LI.FI 5% above the other two providers; treat outliers as provider behaviour. LI.FI quotes
   include their 25 bps service fee, reported separately in `fee_usd`.
+- Remittance quotes have a sparse partial precedent: the Wayback Machine holds occasional
+  captures of Wise's comparison pages and at least one of the comparison API itself (2022). Those
+  are scattered single points, not a panel, but this dataset is "denser than anything that
+  exists" rather than "the only record".
 - Remittance quotes come from Wise's own comparison feed. Coverage per corridor is whatever
   Wise compares against, competitor quotes can lag (see `date_collected`), and the publisher has
   an interest in looking cheapest. The bias is constant and visible rather than hidden, and the

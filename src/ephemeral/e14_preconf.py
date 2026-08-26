@@ -8,6 +8,19 @@ DISCARDED -- no archive serves a replaced unsafe block, so the violation is only
 someone who recorded the promise before it broke. No monitoring dataset of this exists that we
 could find; the OP Stack specs describe the mechanism and nobody measures it.
 
+CORRECTION, 2026-08-26, after this module was written: THE HEARTBEAT LAG IS LARGELY DERIVABLE
+AFTER THE FACT and should not be sold as scarce. Every L2 block header carries its production
+timestamp permanently (verified: blocks 100k, 1M and 10M back all still serve theirs), and the
+batches that make a block safe are L1 transactions, equally permanent. So both ends of the lag
+are archived, and a determined analyst can rebuild the series without having watched. Only the
+VIOLATION rows survive the criterion: a promised hash that the canonical chain replaced is served
+by no archive.
+
+That leaves E14 as a cheap watcher for a rare event, not a continuous product. It stays because
+it costs ~2 requests a minute inside a loop that already runs, and because if a violation ever
+happens nobody else will have recorded it. The heartbeat is kept as ATTESTED COVERAGE for the
+zeros, not as a saleable series.
+
 WHO CARES: anyone crediting funds on an L2 preconfirmation -- exchanges, payment apps, bridges --
 and researchers scoring sequencer trust. The absence of violations is itself the product, but an
 absence is only worth anything with attested coverage, so the dataset has two row types:
