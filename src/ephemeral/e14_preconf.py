@@ -89,13 +89,28 @@ class PreconfWatcher:
         # First write wins: the promise we verify is the FIRST hash we saw at this height.
         self.promised.setdefault(h, (blk["hash"], time.time()))
 
-    def poll_safe_and_verify(self, cap: int = 30) -> None:
+    def poll_safe_and_verify(self, cap: int = 30, min_age_s: float = 180) -> None:
+        """Verify promises by AGE, not by the safe head.
+
+        The original design waited for the safe head to pass a promised height. That does not
+        work: Optimism's public endpoint serves safe = 117,387,667 against latest = 156,074,280,
+        a 38.7M-block gap that is a stale tag rather than a real lag (Base's is 13 blocks). With
+        that tag, no promise on Optimism ever became due and the watcher silently verified
+        NOTHING -- a collector that looks alive and checks nothing.
+
+        The violation test never needed the safe tag anyway: it asks whether the canonical chain
+        still holds the hash we saw at that height, which only requires enough time to pass. The
+        safe head is still recorded on the heartbeat, flagged for plausibility, because the
+        endpoint disagreeing with itself is worth knowing.
+        """
         blk, err = _rpc(self.url, "eth_getBlockByNumber", ["safe", False])
-        if not isinstance(blk, dict):
+        if isinstance(blk, dict):
+            self.safe_height = int(blk["number"], 16)
+        else:
             self.n_failed += 1
-            return
-        self.safe_height = int(blk["number"], 16)
-        due = sorted(h for h in self.promised if h <= self.safe_height)[:cap]
+        now = time.time()
+        due = sorted(h for h, (_hash, seen) in self.promised.items()
+                     if now - seen >= min_age_s)[:cap]
         for h in due:
             uhash, seen = self.promised.pop(h)
             canon, err = _rpc(self.url, "eth_getBlockByNumber", [hex(h), False])
@@ -110,7 +125,8 @@ class PreconfWatcher:
                     "height": h, "unsafe_hash": uhash, "unsafe_seen_ts": seen,
                     "canonical_hash": canon["hash"],
                     "unsafe_height": None, "safe_height": self.safe_height,
-                    "lag_blocks": None, "n_checked": None, "n_failed": None,
+                    "lag_blocks": None, "safe_tag_plausible": None,
+                    "n_checked": None, "n_failed": None,
                 })
 
     def heartbeat(self) -> None:
@@ -118,12 +134,17 @@ class PreconfWatcher:
         # the promise buffer is empty (right after verification drains it) printed "lag 0",
         # which is an artifact of our bookkeeping, not a measurement of the chain.
         unsafe = self.last_unsafe or self.safe_height
+        lag = (unsafe - self.safe_height) if (self.safe_height and unsafe) else None
+        # A lag beyond a day of blocks is a broken tag, not a chain property. Recorded with the
+        # raw numbers intact and a flag, so the endpoint's own inconsistency stays visible
+        # instead of being published as a measurement of the rollup.
+        plausible = (lag is not None and 0 <= lag <= 43200)
         self.rows.append({
             "ts": time.time(), "chain": self.chain, "row_type": "heartbeat",
             "height": None, "unsafe_hash": None, "unsafe_seen_ts": None,
             "canonical_hash": None,
             "unsafe_height": unsafe, "safe_height": self.safe_height,
-            "lag_blocks": (unsafe - self.safe_height) if self.safe_height else None,
+            "lag_blocks": lag, "safe_tag_plausible": plausible,
             "n_checked": self.n_checked, "n_failed": self.n_failed,
         })
         # Promises far behind an advancing safe head that we never got to verify (cap budget)

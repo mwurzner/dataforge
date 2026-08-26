@@ -49,7 +49,7 @@ DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
             "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
             "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
-            "e13_remittance_quotes", "e14_l2_preconf",
+            "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
             "a1_lending_market_state", "a2_vault_state",
             "b2_stuck_markets", "b5_dormancy", "universe"]
 
@@ -60,7 +60,8 @@ EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
              "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
              "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
              "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
-             "e13_remittance_quotes", "e14_l2_preconf"}
+             "e13_remittance_quotes", "e14_l2_preconf",
+             "e15_fee_estimators"}
 
 CARD = """---
 license: odc-by
@@ -95,6 +96,7 @@ discussion here if you want access.
 | `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | Not that we could find. Public Bitcoin mempool tools (Johoe, Bitcoin Visuals, blockchain.com) publish aggregate queue size, not per-transaction lifecycle. The one per-transaction dataset we located covers Dec 2020 to Feb 2021 only. |
 | `e1_*`, `e3_mempool_divergence` (Ethereum) | Yes. The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, CC-0, since September 2023, from a wider node network. Use theirs; ours is an independent second observation. |
 | `e10_quote_benchmark`, `e12_onramp_quotes`, `e13_remittance_quotes` | The live quotes are free to anyone at the moment they ask; a recorded time series was not found anywhere. On-ramp comparisons that exist are one-off blog snapshots of advertised fee schedules, not effective rates over time. |
+| `e15_fee_estimators` | Not that we could find. No provider publishes a history of its own estimates, and an estimate is a function of the mempool at that instant, which no archive holds. Accuracy claims circulate; the data behind them does not. |
 | `e14_l2_preconf` | Partly. The `violation` rows are scarce (a replaced unsafe block is served by no archive). The `heartbeat` lag is **not**: L2 block timestamps and L1 batch times are both permanent, so the lag series can be rebuilt afterwards. Treat the heartbeats as coverage attestation, not as a scarce series. |
 | `a1_*`, `a2_*`, `b2_*`, `b5_*` (contract state) | Yes. Free archive nodes serve the same state years back; we checked at -90d, -360d and -720d on two endpoints. Kept for convenience. |
 
@@ -111,6 +113,7 @@ discussion here if you want access.
 | `e11_ltc_mempool_lifecycle` | a Litecoin transaction we observed, same fields as e8 (single provider, no cross-check) |
 | `e12_onramp_quotes` | one retail fiat on-ramp quote (Mercuryo full quotes; Ramp reference price and fee bounds) |
 | `e13_remittance_quotes` | one provider's quote on one remittance corridor: rate, fee, amount received, shortfall vs the round's best |
+| `e15_fee_estimators` | one Bitcoin fee estimate from one provider at one confirmation target, with the divergence across providers at that target |
 | `e14_l2_preconf` | L2 sequencer promise-keeping: heartbeats with the unsafe-to-safe lag per chain, plus a row for any sampled promise the canonical chain replaced |
 | `e0_run_manifest` | one collection window: polls, failures, coverage counters |
 | `a1_lending_market_state` | one Morpho market's supply/borrow/utilisation at the daily block |
@@ -167,6 +170,12 @@ Read these before building on the data. Each one exists because it bit us first.
   Wise compares against, competitor quotes can lag (see `date_collected`), and the publisher has
   an interest in looking cheapest. The bias is constant and visible rather than hidden, and the
   feed does publish Wise losing where it loses (3% behind Xoom on USD-MXN in our first round).
+- Fee estimators disagree far more than their marketing suggests. A single sample showed a
+  6.7x spread across five providers on the same six-block target. Horizons are normalised to a
+  target-block bucket and the raw payload field is recorded per row, so you can check the
+  normalisation rather than trust it. Paired with `e8_btc_mempool_lifecycle` this supports an
+  accuracy study no public source can currently answer: given the mempool at time T, whose
+  estimate actually confirmed in its promised window.
 - Base (the L2) has no public mempool to observe; it runs a centralised sequencer.
 
 ## Coverage

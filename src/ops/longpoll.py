@@ -38,7 +38,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp, e13_remit, e14_preconf
+from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp, e13_remit, e14_preconf, e15_feeest
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -128,6 +128,8 @@ def main() -> int:
     last_quote = 0.0
     last_ltc = last_ltc_block = 0.0
     last_preconf = last_preconf_safe = last_preconf_hb = 0.0
+    last_fee = 0.0
+    fee_rows: list[pd.DataFrame] = []
     quote_rows: list[pd.DataFrame] = []
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
@@ -193,6 +195,13 @@ def main() -> int:
                 for w in preconf.values():
                     w.heartbeat()
                 last_preconf_hb = now
+
+            if now - last_fee >= 300:      # 5 min: estimators refresh on that order
+                try:
+                    fee_rows.append(e15_feeest.sample())
+                except Exception as exc:
+                    failures.append(f"e15: {exc}")
+                last_fee = now
 
             if now - last_ltc >= BTC_POLL_S:
                 try:
@@ -318,6 +327,15 @@ def main() -> int:
         ok_o = odf[odf["effective_rate"].notna()]
         print(f"  E12: {len(odf):,} on-ramp rows, {len(odf)-len(ok_o)} failed", flush=True)
         write(e12_onramp.DATASET, odf, run_id)
+
+    if fee_rows:
+        fdf = pd.concat(fee_rows, ignore_index=True)
+        okf = fdf[fdf.sat_per_vb.notna()]
+        sr = pd.to_numeric(fdf.spread_ratio, errors="coerce").dropna()
+        print(f"  E15: {len(okf):,} fee estimates from {okf.provider.nunique()} providers, "
+              f"max divergence {sr.max():.1f}x" if len(sr) else
+              f"  E15: {len(okf):,} fee estimates", flush=True)
+        write(e15_feeest.DATASET, fdf, run_id)
 
     pfs = []
     for w in preconf.values():
