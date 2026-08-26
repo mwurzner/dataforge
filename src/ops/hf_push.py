@@ -49,6 +49,7 @@ DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
             "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
             "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
+            "e13_remittance_quotes",
             "a1_lending_market_state", "a2_vault_state",
             "b2_stuck_markets", "b5_dormancy", "universe"]
 
@@ -58,7 +59,8 @@ DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
 EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
              "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
              "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-             "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes"}
+             "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
+             "e13_remittance_quotes"}
 
 CARD = """---
 license: odc-by
@@ -92,7 +94,7 @@ discussion here if you want access.
 |---|---|
 | `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | Not that we could find. Public Bitcoin mempool tools (Johoe, Bitcoin Visuals, blockchain.com) publish aggregate queue size, not per-transaction lifecycle. The one per-transaction dataset we located covers Dec 2020 to Feb 2021 only. |
 | `e1_*`, `e3_mempool_divergence` (Ethereum) | Yes. The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, CC-0, since September 2023, from a wider node network. Use theirs; ours is an independent second observation. |
-| `e10_quote_benchmark`, `e12_onramp_quotes` | The live quotes are free to anyone at the moment they ask; a recorded time series was not found anywhere. On-ramp comparisons that exist are one-off blog snapshots of advertised fee schedules, not effective rates over time. |
+| `e10_quote_benchmark`, `e12_onramp_quotes`, `e13_remittance_quotes` | The live quotes are free to anyone at the moment they ask; a recorded time series was not found anywhere. On-ramp comparisons that exist are one-off blog snapshots of advertised fee schedules, not effective rates over time. |
 | `a1_*`, `a2_*`, `b2_*`, `b5_*` (contract state) | Yes. Free archive nodes serve the same state years back; we checked at -90d, -360d and -720d on two endpoints. Kept for convenience. |
 
 ## Datasets
@@ -107,6 +109,7 @@ discussion here if you want access.
 | `e10_quote_benchmark` | one swap quote from one aggregator (LI.FI, KyberSwap, CoW), with fee split out |
 | `e11_ltc_mempool_lifecycle` | a Litecoin transaction we observed, same fields as e8 (single provider, no cross-check) |
 | `e12_onramp_quotes` | one retail fiat on-ramp quote (Mercuryo full quotes; Ramp reference price and fee bounds) |
+| `e13_remittance_quotes` | one provider's quote on one remittance corridor: rate, fee, amount received, shortfall vs the round's best |
 | `e0_run_manifest` | one collection window: polls, failures, coverage counters |
 | `a1_lending_market_state` | one Morpho market's supply/borrow/utilisation at the daily block |
 | `a2_vault_state` | one ERC-4626 vault's share price and totals at the daily block |
@@ -154,6 +157,10 @@ Read these before building on the data. Each one exists because it bit us first.
 - Quote rows record what each aggregator served, not what was fillable. One captured round has
   LI.FI 5% above the other two providers; treat outliers as provider behaviour. LI.FI quotes
   include their 25 bps service fee, reported separately in `fee_usd`.
+- Remittance quotes come from Wise's own comparison feed. Coverage per corridor is whatever
+  Wise compares against, competitor quotes can lag (see `date_collected`), and the publisher has
+  an interest in looking cheapest. The bias is constant and visible rather than hidden, and the
+  feed does publish Wise losing where it loses (3% behind Xoom on USD-MXN in our first round).
 - Base (the L2) has no public mempool to observe; it runs a centralised sequencer.
 
 ## Coverage
