@@ -261,10 +261,22 @@ class BtcMempoolTracker:
                     self.mined[t] = (h, time.time())   # we simply missed the block
                 checked[t] = "mined"
             elif st.get("confirmed") is False:
-                checked[t] = "flicker"        # never actually left the pool
-                self.n_flicker += 1
+                # `confirmed: False` MEANS "NOT ON CHAIN". IT DOES NOT MEAN "STILL PENDING".
+                # A replaced or evicted transaction reports exactly the same thing as a waiting
+                # one, so treating this field as proof of pendency made `dropped` structurally
+                # impossible to record -- 1,031,595 published rows contained ZERO drops, and the
+                # "685 of 685 flicker" result was 685 misclassifications. Verified against a
+                # transaction known to have been RBF-replaced: /status says confirmed:False while
+                # the mempool does not contain it.
+                #
+                # Pendency is decided by the POOL, which we already hold, so this costs nothing.
+                if t in self.pool or t in self.other:
+                    checked[t] = "flicker"    # genuinely still there; the absence was provider noise
+                    self.n_flicker += 1
+                else:
+                    checked[t] = "gone"       # not on chain AND not in any pool -> really dropped
             else:
-                checked[t] = "gone"
+                checked[t] = "gone"           # 404: the provider has no record of it at all
         return checked
 
     def frame(self) -> pd.DataFrame:
