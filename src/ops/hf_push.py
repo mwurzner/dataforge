@@ -65,12 +65,23 @@ EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
 
 CARD = """---
 license: odc-by
-pretty_name: Bitcoin and Ethereum mempool observation panels
+pretty_name: Bitcoin mempool lifecycle, transaction fees and quote panels
 tags:
-  - bitcoin
-  - ethereum
   - mempool
+  - transaction-fees
+  - fee-estimation
+  - bitcoin
+  - litecoin
+  - ethereum
   - blockchain
+  - cryptocurrency
+  - remittance
+  - exchange-rates
+  - time-series
+task_categories:
+  - time-series-forecasting
+size_categories:
+  - 1M<n<10M
 ---
 
 # DataForge mempool panels
