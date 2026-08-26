@@ -51,7 +51,13 @@ def main() -> int:
         print("  last full-history push did NOT succeed -- refusing to prune", flush=True)
         return 0
     pushed = set(receipt.get("datasets", []))
-    cutoff = (date.today() - timedelta(days=RETAIN_DAYS)).isoformat()
+    # THE CUTOFF MUST RESPECT THE RECEIPT'S DATE, not just today's. The receipt proves what the
+    # last SUCCESSFUL push covered; a partition created after it was never uploaded anywhere.
+    # With a cutoff of (today - RETAIN) alone, an HF outage lasting longer than RETAIN_DAYS
+    # would let this delete the only copy of the windows collected during the outage -- the one
+    # loss this whole design exists to prevent.
+    cutoff = min((date.today() - timedelta(days=RETAIN_DAYS)).isoformat(),
+                 str(receipt.get("pushed_at", "0000")))
     print(f"  receipt {receipt.get('pushed_at')} | retaining {RETAIN_DAYS}d "
           f"(cutoff {cutoff})", flush=True)
 
