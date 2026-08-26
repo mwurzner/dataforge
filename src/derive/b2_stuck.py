@@ -96,9 +96,25 @@ def run(chain: str, block: int, ts: int, date: str, runlog) -> None:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
 
+    # TEMPLATE COHORTS. Base reported 779 stuck markets (63.6% of non-empty) against Ethereum's
+    # 9.9% and family 56's published 10.6%. The 6x gap is not a chain difference: those 779 hold
+    # only 43 DISTINCT supply values, with 598 sharing 361,000,444,898 to the digit and 100 more
+    # sharing another. They are mass-deployed markets from a couple of templates, all seeded with
+    # an identical amount and fully borrowed by the seeder -- one situation replicated, not 779
+    # independent ones. Counting them singly overstates the signal ~18x.
+    #
+    # The cohort SIZE is recorded rather than a threshold flag, because where to cut is the
+    # user's judgement, not ours. Family 30 hit the same shape: 13,109 byte-identical contracts
+    # behind what looked like a population.
+    cohort = df.groupby("total_supply_assets")["market_id"].transform("size")
+    df["supply_cohort_size"] = cohort.where(~df["is_empty"], pd.NA)
+    df["is_stuck_distinct"] = df["is_stuck"] & (cohort == 1)
+
     n_stuck = int(df["is_stuck"].sum())
+    n_distinct = int(df["total_supply_assets"][df["is_stuck"]].nunique())
     n_live = int((~df["is_empty"]).sum())
     write_partition(DATASET, chain, date, df, block, ts)
     runlog.record(DATASET, chain, date, block, ts, len(df), 0, 0,
                   note=f"{n_stuck} stuck of {n_live} non-empty "
-                       f"({100*n_stuck/max(n_live,1):.1f}%), {int(df['is_empty'].sum())} empty")
+                       f"({100*n_stuck/max(n_live,1):.1f}%), {n_distinct} distinct supply values, "
+                       f"{int(df['is_empty'].sum())} empty")
