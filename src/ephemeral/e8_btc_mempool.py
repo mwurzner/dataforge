@@ -136,6 +136,19 @@ class BtcMempoolTracker:
         self.n_failed = 0
         self.n_verified = 0
         self.n_flicker = 0          # candidates the status check proved were never gone
+        # FEE RATE PER TRANSACTION. Without it this dataset can describe WHEN things happened
+        # but not WHY, and no fee-market question can be asked of it -- which only became
+        # obvious when a study needed the column and it was not there. The txid list carries no
+        # fee, and a per-transaction lookup across ~85k entries is out of the question, but
+        # /mempool/recent returns the 10 newest arrivals with fee and vsize for ~1 KB. Polled on
+        # the fast loop it samples a steady fraction of arrivals at negligible cost.
+        self.fees: dict[str, tuple[int, int]] = {}      # txid -> (fee_sat, vsize)
+        self.n_fee_polls = 0
+        # Chain tip when we first saw each transaction. Without it, "confirmed within N blocks"
+        # can only be approximated from elapsed time at ten minutes a block, which is wrong by a
+        # whole block whenever an interval runs long or short -- and block intervals are the
+        # noisiest thing in Bitcoin. With it, blocks_waited is exact arithmetic.
+        self.tip_at_seen: dict[str, int] = {}
         # A SECOND PROVIDER'S POOL, refreshed in bulk. Measured flicker on the primary was 685 of
         # 685 -- roughly 98 spurious candidates a minute -- while per-transaction status checks
         # clear only ~20/min, so verification could never keep up and most rows would end
@@ -164,7 +177,10 @@ class BtcMempoolTracker:
 
         new = cur - self.pool - self.pre_existing
         for t in new:
-            self.seen.setdefault(t, now)
+            if t not in self.seen:
+                self.seen[t] = now
+                if self.tip:
+                    self.tip_at_seen[t] = self.tip
         # Debounce absences. Presence resets the counter, so a transaction has to be consistently
         # gone rather than merely missing from one load-balanced node's view.
         for t in cur:
@@ -195,6 +211,24 @@ class BtcMempoolTracker:
         self.other = set(ids)
         self.other_ts = time.time()
         return len(self.other)
+
+    def poll_recent(self) -> int:
+        """Capture fee and vsize for the newest arrivals. Cheap, and the only route to a fee
+        rate that does not cost one request per transaction."""
+        d, err = _get(f"{self.base}/mempool/recent", timeout=20)
+        self.n_fee_polls += 1
+        if not isinstance(d, list):
+            self.n_failed += 1
+            return 0
+        got = 0
+        for tx in d:
+            t = tx.get("txid")
+            v = tx.get("vsize")
+            f = tx.get("fee")
+            if t and isinstance(v, int) and v > 0 and isinstance(f, int) and t not in self.fees:
+                self.fees[t] = (f, v)
+                got += 1
+        return got
 
     def poll_blocks(self) -> int:
         """Mark txids mined. Bitcoin blocks arrive ~every 10 min, so this is cheap."""
@@ -300,9 +334,19 @@ class BtcMempoolTracker:
                 fate = "unresolved"
             else:
                 fate = "still_pending"
+            fee, vsize = self.fees.get(t, (None, None))
             rows.append({
                 "txid": t,
                 "first_seen_ts": first,
+                "fee_sat": fee,
+                "vsize": vsize,
+                # Null unless we sampled this transaction on the recent feed. Never imputed:
+                # a guessed fee rate would corrupt exactly the analyses the column exists for.
+                "fee_rate_sat_vb": (round(fee / vsize, 4)
+                                    if (fee is not None and vsize) else None),
+                "tip_at_first_seen": self.tip_at_seen.get(t),
+                "blocks_waited": ((height - self.tip_at_seen[t])
+                                  if (height is not None and t in self.tip_at_seen) else None),
                 "pre_existing": t in self.pre_existing,
                 "mined_height": height,
                 "block_observed_ts": obs,
