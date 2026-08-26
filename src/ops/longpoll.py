@@ -38,7 +38,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp, e13_remit
+from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp, e13_remit, e14_preconf
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -119,6 +119,7 @@ def main() -> int:
     # divergence sampling; the frame records that honestly rather than faking a weaker claim.
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
+    preconf = e14_preconf.make_watchers()
     div_rows: list[pd.DataFrame] = []
     btc_div_rows: list[pd.DataFrame] = []
     t0 = time.time()
@@ -126,6 +127,7 @@ def main() -> int:
     last_btc = last_btc_block = last_btc_div = 0.0
     last_quote = 0.0
     last_ltc = last_ltc_block = 0.0
+    last_preconf = last_preconf_safe = last_preconf_hb = 0.0
     quote_rows: list[pd.DataFrame] = []
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
@@ -172,6 +174,25 @@ def main() -> int:
                 except Exception as exc:
                     failures.append(f"e9: {exc}")
                 last_btc_div = now
+
+            if now - last_preconf >= 6:
+                for w in preconf.values():
+                    try:
+                        w.poll_unsafe()
+                    except Exception as exc:
+                        failures.append(f"e14 {w.chain}: {exc}")
+                last_preconf = now
+            if now - last_preconf_safe >= 60:
+                for w in preconf.values():
+                    try:
+                        w.poll_safe_and_verify()
+                    except Exception as exc:
+                        failures.append(f"e14 safe {w.chain}: {exc}")
+                last_preconf_safe = now
+            if now - last_preconf_hb >= 120:
+                for w in preconf.values():
+                    w.heartbeat()
+                last_preconf_hb = now
 
             if now - last_ltc >= BTC_POLL_S:
                 try:
@@ -297,6 +318,26 @@ def main() -> int:
         ok_o = odf[odf["effective_rate"].notna()]
         print(f"  E12: {len(odf):,} on-ramp rows, {len(odf)-len(ok_o)} failed", flush=True)
         write(e12_onramp.DATASET, odf, run_id)
+
+    pfs = []
+    for w in preconf.values():
+        try:
+            w.poll_safe_and_verify()
+            w.heartbeat()
+        except Exception as exc:
+            failures.append(f"e14 final {w.chain}: {exc}")
+        pfs.append(w.frame())
+    pdf = pd.concat([f for f in pfs if len(f)], ignore_index=True) if any(len(f) for f in pfs)         else pd.DataFrame()
+    if len(pdf):
+        nv = int((pdf["row_type"] == "violation").sum())
+        for w in preconf.values():
+            hb = pdf[(pdf.chain == w.chain) & (pdf.row_type == "heartbeat")]
+            if len(hb):
+                print(f"  E14 {w.chain}: lag {hb.lag_blocks.iloc[-1]} blocks, "
+                      f"checked {w.n_checked}, violations "
+                      f"{int(((pdf.chain == w.chain) & (pdf.row_type == 'violation')).sum())}",
+                      flush=True)
+        write(e14_preconf.DATASET, pdf, run_id)
 
     if remit_rows:
         rdf = pd.concat(remit_rows, ignore_index=True)
