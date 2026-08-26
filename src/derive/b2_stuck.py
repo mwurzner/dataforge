@@ -72,8 +72,17 @@ def run(chain: str, block: int, ts: int, date: str, runlog) -> None:
         df = df.join(pj["total_supply_assets"].rename("prev_supply"), on="market_id")
         df = df.join((pj["total_supply_assets"] / pj["total_supply_shares"].replace(0, pd.NA))
                      .rename("prev_share_price"), on="market_id")
-        df["supply_growth"] = df["total_supply_assets"] / df["prev_supply"] - 1.0
-        df["share_price_growth"] = df["supply_share_price"] / df["prev_share_price"] - 1.0
+        # ZERO DENOMINATORS ARE NOT GROWTH. A market that held nothing yesterday and holds
+        # something today has an UNDEFINED growth rate, not an infinite one -- and the columns are
+        # object-dtype Python ints at this point (they are cast to float64 further down), so the
+        # division RAISES rather than yielding inf. That is what took the daily job down on both
+        # chains at once after passing for days: it is data-dependent, needing only one market to
+        # be funded for the first time. Same class as the dormancy rule used throughout this
+        # project -- an unobservable quantity must be NULL, never a number.
+        df["supply_growth"] = (df["total_supply_assets"]
+                               / df["prev_supply"].replace(0, pd.NA)) - 1.0
+        df["share_price_growth"] = (df["supply_share_price"]
+                                    / df["prev_share_price"].replace(0, pd.NA)) - 1.0
         # The full family 56 signature: pinned utilisation AND a rising price. The rise is what
         # makes it invisible to a decline-based detector.
         df["phantom_signature"] = df["is_stuck"] & (df["share_price_growth"] > 0)
