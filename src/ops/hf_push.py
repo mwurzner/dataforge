@@ -48,7 +48,7 @@ SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
             "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-            "e10_quote_benchmark",
+            "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
             "a1_lending_market_state", "a2_vault_state",
             "b2_stuck_markets", "b5_dormancy", "universe"]
 
@@ -58,7 +58,7 @@ DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
 EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
              "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
              "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-             "e10_quote_benchmark"}
+             "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes"}
 
 CARD = """---
 license: odc-by
@@ -92,7 +92,7 @@ discussion here if you want access.
 |---|---|
 | `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | Not that we could find. Public Bitcoin mempool tools (Johoe, Bitcoin Visuals, blockchain.com) publish aggregate queue size, not per-transaction lifecycle. The one per-transaction dataset we located covers Dec 2020 to Feb 2021 only. |
 | `e1_*`, `e3_mempool_divergence` (Ethereum) | Yes. The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, CC-0, since September 2023, from a wider node network. Use theirs; ours is an independent second observation. |
-| `e10_quote_benchmark` | The live comparison is free anywhere (LlamaSwap etc.); a recorded time series of it is not, as far as we found. |
+| `e10_quote_benchmark`, `e12_onramp_quotes` | The live quotes are free to anyone at the moment they ask; a recorded time series was not found anywhere. On-ramp comparisons that exist are one-off blog snapshots of advertised fee schedules, not effective rates over time. |
 | `a1_*`, `a2_*`, `b2_*`, `b5_*` (contract state) | Yes. Free archive nodes serve the same state years back; we checked at -90d, -360d and -720d on two endpoints. Kept for convenience. |
 
 ## Datasets
@@ -105,6 +105,8 @@ discussion here if you want access.
 | `e1_mempool_dropped` | an Ethereum transaction that was never mined, full detail |
 | `e3_mempool_divergence` | one Ethereum node's pending view at a sample instant, versus three others |
 | `e10_quote_benchmark` | one swap quote from one aggregator (LI.FI, KyberSwap, CoW), with fee split out |
+| `e11_ltc_mempool_lifecycle` | a Litecoin transaction we observed, same fields as e8 (single provider, no cross-check) |
+| `e12_onramp_quotes` | one retail fiat on-ramp quote (Mercuryo full quotes; Ramp reference price and fee bounds) |
 | `e0_run_manifest` | one collection window: polls, failures, coverage counters |
 | `a1_lending_market_state` | one Morpho market's supply/borrow/utilisation at the daily block |
 | `a2_vault_state` | one ERC-4626 vault's share price and totals at the daily block |
