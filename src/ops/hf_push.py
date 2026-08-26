@@ -1,31 +1,25 @@
-"""Push collected partitions to HuggingFace: full history private, rolling sample public.
+"""Publish the panels to HuggingFace: three public products, one private archive.
 
-WHY HUGGINGFACE RATHER THAN THE GIT REPO. Measured volume is ~135 MB/day for E1 alone, which is
-~49 GB/year. A GitHub repo becomes unusable well before that; HF datasets are git-LFS backed and
-built for exactly this. It is also where data users already look, so the same push serves storage
-and distribution. NOTE the free-account private ceiling is 100 GB, which E1 alone reaches in about
-two years.
+WHY THREE REPOS AND NOT ONE. Everything used to land in a single repo called `dataforge-sample`,
+which by the end held 18 unrelated datasets. No name could describe it, because a Bitcoin mempool
+panel and a bank remittance panel have no reader in common: somebody hunting remittance pricing
+would never open a repo with "mempool" in the title, and somebody after mempool data had to wade
+past lending-market parquet to reach it. The naming problem was a packaging problem.
 
-TWO TARGETS:
-    dataforge-ephemeral  PRIVATE  full history
-    dataforge-sample     PUBLIC   rolling window of the ephemeral sets, full history of the rest
+So the split is by AUDIENCE, not by dataset count:
 
-WHAT IS ACTUALLY SCARCE, stated honestly because it changed:
-    E8/E9 (BITCOIN)  -- no continuously-updated free per-transaction mempool archive was found.
-                        Checked 2026-08-25: MempoolScape (Kaggle) is a fixed Dec'20-Feb'21 window,
-                        Blocknative is EVM-only and sunset its archive in March 2025, and the free
-                        Bitcoin tooling (Johoe, Bitcoin Visuals, blockchain.com) is AGGREGATE
-                        mempool size, not per-transaction lifecycle. This is the scarce part.
-    E1/E3 (ETHEREUM) -- NOT scarce. The Flashbots Mempool Dumpster publishes the same measurement
-                        daily, free, CC-0, since Sept 2023, including never-mined transactions and
-                        a per-source arrival log. Kept because it costs nothing and is a genuine
-                        independent measurement, but it is not a product and must not be sold as
-                        one.
-    a*/b* PANELS     -- NOT scarce. Free archive endpoints serve the same contract state to -720d
-                        (verified on two independent endpoints).
+    bitcoin-mempool-lifecycle   what happens to transactions before they confirm
+    crypto-execution-costs      what it costs to move money, quoted and compared
+    remittance-pricing-panel    what banks and money transmitters charge, corridor by corridor
 
-THE GIT PUSH IS DELIBERATELY KEPT AS WELL. An HF outage during a 5.5h collection window would
-otherwise cost an ephemeral window, and an ephemeral window cannot be re-collected.
+The private archive keeps everything, including panels we do NOT publish because they are freely
+available elsewhere (Morpho lending state, which any archive node serves). Publishing those would
+add clutter to whichever product they were bolted onto without giving a reader anything they
+could not already get.
+
+WINDOWING. Public repos carry a rolling window of the ephemeral panels; the accumulated history
+stays private. The run manifest is exempt and always published in full: it holds no measurements,
+only what was collected and when, and a coverage record you cannot inspect is worth nothing.
 """
 from __future__ import annotations
 
@@ -40,111 +34,74 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 OWNER = os.environ.get("HF_OWNER", "SleeveZipper")
-FULL_REPO = f"{OWNER}/dataforge-ephemeral"
-SAMPLE_REPO = f"{OWNER}/dataforge-sample"
+ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, never browsed
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 
-# Datasets whose partitions are named by RUN (ephemeral) or by DATE (state panels).
-DATASETS = ["e0_run_manifest", "e1_mempool_lifecycle",
-            "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
-            "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-            "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
-            "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
-            "a1_lending_market_state", "a2_vault_state",
-            "b2_stuck_markets", "b5_dormancy", "universe"]
+MANIFEST = "e0_run_manifest"
+# Held back from the public window. The manifest is deliberately absent: it is the coverage
+# attestation and is useless withheld.
+WINDOWED = {
+    "e1_mempool_lifecycle", "e1_mempool_minutely", "e1_mempool_dropped",
+    "e3_mempool_divergence", "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
+    "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
+    "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
+}
+# Collected and archived, never published: freely available from an archive node.
+ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
+                "b5_dormancy", "universe"}
 
-# The rolling window applies ONLY to the sets whose accumulated history is the thing being held
-# back. Windowing the state panels would withhold nothing (they are freely backfillable) while
-# making the public repo less useful, so they go out at full history.
-EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
-             "e1_mempool_minutely", "e1_mempool_dropped", "e3_mempool_divergence",
-             "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-             "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
-             "e13_remittance_quotes", "e14_l2_preconf",
-             "e15_fee_estimators"}
+_SHARED_TAIL = """
+## Coverage
 
-CARD = """---
-license: odc-by
-pretty_name: Bitcoin mempool lifecycle, transaction fees and quote panels
-tags:
-  - mempool
-  - transaction-fees
-  - fee-estimation
-  - bitcoin
-  - litecoin
-  - ethereum
-  - blockchain
-  - cryptocurrency
-  - remittance
-  - exchange-rates
-  - time-series
-task_categories:
-  - time-series-forecasting
-size_categories:
-  - 1M<n<10M
----
+`e0_run_manifest` lists every collection window with its poll counts and failure counts, and is
+published in full rather than windowed. Gaps between windows are real, cannot be filled in
+afterwards, and nothing here is interpolated.
 
-# DataForge mempool panels
+## License and contact
 
-Continuous observation of the Bitcoin and Ethereum mempools: when each transaction was first
-seen, how long it waited, and which ones disappeared without being mined.
+ODC-BY: use it freely, credit "DataForge (SleeveZipper)". Questions and requests for the full
+history via the discussions tab.
+"""
+
+PRODUCTS = {
+    "bitcoin-mempool-lifecycle": {
+        "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
+                     "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
+                     "e1_mempool_minutely", "e1_mempool_dropped", "e1_mempool_lifecycle",
+                     "e3_mempool_divergence", MANIFEST],
+        "example": "e8_btc_mempool_lifecycle",
+        "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
+        "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
+                 "ethereum", "blockchain", "cryptocurrency", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Bitcoin mempool lifecycle
+
+What happens to a transaction between being broadcast and being mined: when we first saw it, how
+long it waited, what fee it paid, and whether it was ever mined at all.
 
 A confirmed transaction keeps its body forever but loses its timing, and one that is never mined
 leaves no trace at all. We checked this on Bitcoin before collecting anything: the public
 first-seen lookup answers while a transaction is unconfirmed and returns 0 once it is mined,
 whether that was a day ago or a year ago. So it gets recorded as it happens or not at all.
 
-The collector runs four windows of about 5.5 hours per day (roughly 22h coverage). This public
-repo carries a rolling {SAMPLE_DAYS}-day window of the mempool datasets and the full history of
-the contract-state panels. The full mempool history accumulates in a private repo; open a
-discussion here if you want access.
+Bitcoin is the point of this repo. Litecoin runs the same collector. Ethereum is included as a
+second observation, but if you want Ethereum specifically, the
+[Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same
+measurement daily under CC-0, from a wider node network and going back to September 2023. Theirs
+is better than ours; use it.
 
-## Which of these are hard to get elsewhere
-
-Some of this is freely available from better sources. Where that is true it says so, and points
-you there.
-
-| dataset | free elsewhere? |
-|---|---|
-| `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | Not that we could find. Public Bitcoin mempool tools (Johoe, Bitcoin Visuals, blockchain.com) publish aggregate queue size, not per-transaction lifecycle. The one per-transaction dataset we located covers Dec 2020 to Feb 2021 only. |
-| `e1_*`, `e3_mempool_divergence` (Ethereum) | Yes. The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, CC-0, since September 2023, from a wider node network. Use theirs; ours is an independent second observation. |
-| `e10_quote_benchmark`, `e12_onramp_quotes`, `e13_remittance_quotes` | The live quotes are free to anyone at the moment they ask; a recorded time series was not found anywhere. On-ramp comparisons that exist are one-off blog snapshots of advertised fee schedules, not effective rates over time. |
-| `e15_fee_estimators` | Not that we could find. No provider publishes a history of its own estimates, and an estimate is a function of the mempool at that instant, which no archive holds. Accuracy claims circulate; the data behind them does not. |
-| `e14_l2_preconf` | Partly. The `violation` rows are scarce (a replaced unsafe block is served by no archive). The `heartbeat` lag is **not**: L2 block timestamps and L1 batch times are both permanent, so the lag series can be rebuilt afterwards. Treat the heartbeats as coverage attestation, not as a scarce series. |
-| `a1_*`, `a2_*`, `b2_*`, `b5_*` (contract state) | Yes. Free archive nodes serve the same state years back; we checked at -90d, -360d and -720d on two endpoints. Kept for convenience. |
-
-## Datasets
+## What is in here
 
 | name | one row is |
 |---|---|
-| `e8_btc_mempool_lifecycle` | a Bitcoin transaction we observed: first seen, mined height, dwell, fate |
-| `e9_btc_mempool_divergence` | one provider's pending-set size and overlap at a sample instant |
+| `e8_btc_mempool_lifecycle` | a Bitcoin transaction: first seen, fee rate, mined height, blocks waited, fate |
+| `e9_btc_mempool_divergence` | one provider's pending-set size and overlap with another, at an instant |
+| `e11_ltc_mempool_lifecycle` | the same as e8, for Litecoin (single provider, no cross-check) |
+| `e15_fee_estimators` | one fee estimate from one of five providers, at one confirmation target |
 | `e1_mempool_minutely` | one minute of Ethereum mempool activity: arrivals, fates, dwell quantiles |
-| `e1_mempool_dropped` | an Ethereum transaction that was never mined, full detail |
-| `e3_mempool_divergence` | one Ethereum node's pending view at a sample instant, versus three others |
-| `e10_quote_benchmark` | one swap quote from one aggregator (LI.FI, KyberSwap, CoW), with fee split out |
-| `e11_ltc_mempool_lifecycle` | a Litecoin transaction we observed, same fields as e8 (single provider, no cross-check) |
-| `e12_onramp_quotes` | one retail fiat on-ramp quote (Mercuryo full quotes; Ramp reference price and fee bounds) |
-| `e13_remittance_quotes` | one provider's quote on one remittance corridor: rate, fee, amount received, shortfall vs the round's best |
-| `e15_fee_estimators` | one Bitcoin fee estimate from one provider at one confirmation target, with the divergence across providers at that target |
-| `e14_l2_preconf` | L2 sequencer promise-keeping: heartbeats with the unsafe-to-safe lag per chain, plus a row for any sampled promise the canonical chain replaced |
+| `e1_mempool_dropped` | an Ethereum transaction that was never mined, in full |
+| `e3_mempool_divergence` | one Ethereum node's pending view against three others |
 | `e0_run_manifest` | one collection window: polls, failures, coverage counters |
-| `a1_lending_market_state` | one Morpho market's supply/borrow/utilisation at the daily block |
-| `a2_vault_state` | one ERC-4626 vault's share price and totals at the daily block |
-| `b2_stuck_markets` | one market tested against the stuck signature (>=99% utilisation, rising price) |
-| `b5_dormancy` | one vault tested for an unmoved share price |
-
-Partitions are parquet, one file per collection window, under `dataset/YYYY/MM/`.
-
-```python
-from huggingface_hub import snapshot_download
-import pandas as pd, glob
-
-path = snapshot_download("SleeveZipper/dataforge-sample", repo_type="dataset",
-                         allow_patterns="e8_btc_mempool_lifecycle/**")
-df = pd.concat(map(pd.read_parquet, glob.glob(f"{path}/e8_btc_mempool_lifecycle/**/*.parquet",
-                                              recursive=True)))
-```
 
 ## Before you build on this
 
@@ -152,57 +109,142 @@ Most of these came out of getting something wrong first.
 
 - `first_seen_ts` is when WE saw it, on our clock, from our own polling. The network saw it a
   little earlier. We never copy a provider's own first-seen field.
-- Rows with `pre_existing = true` were already in the pool when a window started. Their true
-  arrival time is unknowable, so `first_seen_ts` is null there rather than a fabricated value.
-- Bitcoin `fate = "dropped"` starts 2026-08-26. Before that a classifier defect made drops
-  impossible to record (a status endpoint reports `confirmed: false` for replaced and waiting
-  transactions alike, and we mistook that for pendency). Partitions from 2026-08-25 are kept
-  as collected rather than rewritten.
+- Rows with `pre_existing = true` were already pending when a window opened. Their real arrival
+  time is unknowable, so `first_seen_ts` is null there rather than a made-up value.
+- Bitcoin `fate = "dropped"` starts 2026-08-26. Before that, a bug made drops impossible to
+  record: the status endpoint reports `confirmed: false` for a replaced transaction exactly as it
+  does for a waiting one, and we read that as proof it was still pending. Earlier partitions are
+  kept as collected rather than rewritten.
 - We only call something dropped once it is missing from the chain, missing from two providers'
   pools, and missing for ten polls running. Weaker tests do not work: a plain poll-to-poll diff
   invented 642 "drops" in 200 seconds and every one we checked was still in the mempool.
-- Mempools are node-local. Retention is a node policy, not a protocol rule; our provider served
-  115-day-old entries while Bitcoin Core defaults to eviction after 336 hours. `e9` records how
-  much two providers disagree (typically several thousand transactions at any instant).
+- `fee_rate_sat_vb` is present on roughly a fifth of observed arrivals, sampled from the recent
+  feed. It is never estimated for the rest, because a guessed fee rate would ruin the analyses
+  the column exists for.
+- Mempools are node-local, and how long a node keeps things is its own choice rather than a
+  protocol rule. Ours served 115-day-old entries where Bitcoin Core would have evicted after 336
+  hours. `e9` tracks how far apart two providers are, usually several thousand transactions.
 - Bitcoin dwell times are long. Around 10 minutes for transactions that confirm quickly, but the
   pool also holds a standing backlog whose median age is over 100 days. That is Bitcoin's fee
   market, not a collection error.
-- Ethereum has two dwell columns. `dwell_seconds` uses the block's own timestamp (the proposer's
-  clock); `dwell_seconds_local` uses ours at observation. For timing work filter
-  `lag_blocks == 0`, where the local reading is fresh.
-- Ethereum is stored as per-minute aggregates plus full rows for never-mined transactions, from
-  2026-08-25 onward. For per-transaction Ethereum data use the Flashbots Dumpster.
+- Fee estimators disagree much more than their marketing suggests: one sample showed a 6.7x
+  spread across five providers on the same six-block target. Targets are normalised to a block
+  count and the raw payload field is kept per row, so you can check that rather than trust it.
+- Ethereum is stored as per-minute aggregates plus full rows for never-mined transactions.
+""",
+    },
+    "crypto-execution-costs": {
+        "datasets": ["e10_quote_benchmark", "e12_onramp_quotes", "e14_l2_preconf", MANIFEST],
+        "example": "e10_quote_benchmark",
+        "pretty": "Crypto execution costs: DEX quotes, fiat on-ramps, L2 confirmation",
+        "tags": ["defi", "dex", "execution-cost", "slippage", "onramp", "ethereum",
+                 "blockchain", "cryptocurrency", "time-series"],
+        "size": "10K<n<100K",
+        "body": """# Crypto execution costs
+
+What it actually costs to move money on-chain, recorded as it was quoted. Three angles: swap
+quotes from competing DEX aggregators, retail fiat on-ramp quotes, and how long an L2 takes to
+turn a sequencer promise into something L1 confirms.
+
+Quotes are computed per request against live state and stored by nobody. The live comparison is
+free to anyone at the moment they ask; a record of what was quoted over time is not, as far as we
+could find.
+
+## What is in here
+
+| name | one row is |
+|---|---|
+| `e10_quote_benchmark` | one swap quote from LI.FI, KyberSwap or CoW, at a fixed size, fee split out |
+| `e12_onramp_quotes` | one retail fiat on-ramp quote, buy or sell |
+| `e14_l2_preconf` | an L2 heartbeat (unsafe vs safe head) or a sequencer promise the chain replaced |
+| `e0_run_manifest` | one collection window: polls, failures, coverage counters |
+
+## Before you build on this
+
 - Quote rows are what each aggregator served, which is not what you could have filled. One round
   has LI.FI 5% above the other two; read outliers as provider behaviour rather than free money.
-  LI.FI quotes include their 25 bps fee, split out into `fee_usd`.
-- Remittance quotes have a sparse partial precedent: the Wayback Machine holds occasional
-  captures of Wise's comparison pages and at least one of the comparison API itself (2022). Those
-  are scattered single points, not a panel, but this dataset is "denser than anything that
-  exists" rather than "the only record".
-- Remittance quotes come from Wise's own comparison feed. Coverage per corridor is whatever
-  Wise compares against, competitor quotes can lag (see `date_collected`), and the publisher has
-  an interest in looking cheapest. The bias is constant and visible rather than hidden, and the
-  feed does publish Wise losing where it loses (3% behind Xoom on USD-MXN in our first round).
-- Fee estimators disagree far more than their marketing suggests. A single sample showed a
-  6.7x spread across five providers on the same six-block target. Horizons are normalised to a
-  target-block bucket and the raw payload field is recorded per row, so you can check the
-  normalisation rather than trust it. Paired with `e8_btc_mempool_lifecycle` this supports an
-  accuracy study no public source can currently answer: given the mempool at time T, whose
-  estimate actually confirmed in its promised window.
-- Base (the L2) has no public mempool to observe; it runs a centralised sequencer.
+- LI.FI applies a fixed fee of about 25 bps at every size. It is split into `fee_usd` precisely
+  so its pricing policy is not mistaken for worse routing. Read price and fee together.
+- The on-ramp panel is thin: Mercuryo answers full quotes without a key, Ramp gives a reference
+  price and fee bounds, and MoonPay, Transak, Guardarian and Mt Pelerin all require keys. It is
+  1.5 providers, not a market survey.
+- In `e14`, only the `violation` rows are hard to get elsewhere. The heartbeat lag can be rebuilt
+  after the fact from L2 block timestamps and L1 batch times, both of which are permanent, so
+  treat heartbeats as coverage attestation rather than as a scarce series.
+- Optimism's public endpoint serves a stale `safe` tag (tens of millions of blocks behind, where
+  Base is a dozen). Rows carry `safe_tag_plausible` so that shows up instead of being published
+  as a property of the rollup.
+""",
+    },
+    "remittance-pricing-panel": {
+        "datasets": ["e13_remittance_quotes", MANIFEST],
+        "example": "e13_remittance_quotes",
+        "pretty": "Cross-border remittance pricing, by corridor and provider",
+        "tags": ["remittance", "exchange-rates", "fintech", "payments", "banking",
+                 "foreign-exchange", "time-series", "finance"],
+        "size": "10K<n<100K",
+        "body": """# Cross-border remittance pricing
 
-## Coverage
+What it costs to send money across nine major corridors, quoted per provider, several times a
+day. Each round captures 8 to 22 providers per corridor, including Wise, Western Union, PayPal,
+Xoom, WorldRemit, Instarem and a range of retail banks, with the rate, the fee, and the amount
+that would actually arrive.
 
-`e0_run_manifest` records every window with poll counts and failure counts. Gaps between windows
-are real and cannot be repaired afterwards; nothing is interpolated.
+The World Bank surveys remittance prices quarterly by mystery shopping. We could not find a
+high-frequency record of provider pricing anywhere, and quotes change far faster than quarterly.
 
-## License and contact
+Worst-versus-best spread on the same transfer runs from 2.5% to 8.8% depending on the corridor.
 
-ODC-BY: use freely, attribute "DataForge (SleeveZipper)". Questions and access requests via the
-discussions tab.
-"""
+## What is in here
 
-CARD = CARD.replace("{SAMPLE_DAYS}", str(SAMPLE_DAYS))
+| name | one row is |
+|---|---|
+| `e13_remittance_quotes` | one provider's quote on one corridor: rate, fee, amount received, shortfall against the best in that round |
+| `e0_run_manifest` | one collection window: polls, failures, coverage counters |
+
+## Before you build on this
+
+- The source is Wise's own public comparison service. Which competitors appear in a corridor is
+  Wise's choice, competitor quotes can lag (see `date_collected` where present), and the
+  publisher has an obvious interest in looking cheap. The bias is at least constant and visible,
+  and `is_wise_own_quote` marks their own rows. For what it is worth, the feed does publish Wise
+  losing: it was 3% behind Xoom on USD to MXN in our first round.
+- The Wayback Machine holds occasional captures of Wise's comparison pages and at least one of
+  the comparison API, from 2022. Those are scattered single points rather than a panel, so this
+  is denser than anything that exists rather than the only record of it.
+- `shortfall_vs_best_pct` is computed within a round, so it compares providers quoted at the same
+  moment rather than against a daily benchmark.
+""",
+    },
+}
+
+
+def _card(name: str, p: dict) -> str:
+    tags = "\n".join(f"  - {t}" for t in p["tags"])
+    repo = f"{OWNER}/{name}"
+    ex = p["example"]
+    load = (
+        "\n```python\n"
+        "from huggingface_hub import snapshot_download\n"
+        "import pandas as pd, glob\n\n"
+        f'path = snapshot_download("{repo}", repo_type="dataset",\n'
+        f'                         allow_patterns="{ex}/**")\n'
+        "df = pd.concat(map(pd.read_parquet,\n"
+        f'                   glob.glob(f"{{path}}/{ex}/**/*.parquet", recursive=True)))\n'
+        "```\n"
+    )
+    # QUOTED. A colon inside pretty_name ("Crypto execution costs: DEX quotes...")
+    # makes the entire front matter fail to parse, and HF then applies none of the
+    # metadata, silently undoing the discoverability work this block exists for.
+    # Caught by validating the YAML instead of eyeballing it.
+    return (f"---\nlicense: odc-by\npretty_name: \"{p['pretty']}\"\ntags:\n{tags}\n"
+            f"task_categories:\n  - time-series-forecasting\n"
+            f"size_categories:\n  - {p['size']}\n---\n\n"
+            + p["body"]
+            + f"\nPartitions are parquet, one file per collection window, under "
+              f"`dataset/YYYY/MM/`. This repo carries a rolling {SAMPLE_DAYS}-day window of the "
+              f"panels above; the accumulated history is held privately.\n"
+            + load + _SHARED_TAIL)
 
 
 def _partitions(dataset: str) -> list[Path]:
@@ -210,88 +252,78 @@ def _partitions(dataset: str) -> list[Path]:
     return sorted(root.rglob("*.parquet")) if root.exists() else []
 
 
-def _stage(target: Path, since: date | None) -> dict:
-    """Copy partitions into a staging tree, optionally windowed. Returns per-dataset counts."""
+def _stage(target: Path, datasets, since: date | None, card: str | None) -> dict:
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
     summary = {}
-    for ds in DATASETS:
+    for ds in datasets:
         files = _partitions(ds)
-        if since is not None and ds in EPHEMERAL:
-            # Partition stems are either YYYY-MM-DD or YYYY-MM-DDTHHMMZ; both sort by date.
+        if since is not None and ds in WINDOWED:
             files = [f for f in files if f.stem[:10] >= since.isoformat()]
         if not files:
             continue
-        n = 0
         for f in files:
-            rel = f.relative_to(DATA)
-            dst = target / rel
+            dst = target / f.relative_to(DATA)
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(f, dst)
-            n += 1
-        summary[ds] = n
-    (target / "README.md").write_text(CARD, encoding="utf-8")
+        summary[ds] = len(files)
+    if card:
+        (target / "README.md").write_text(card, encoding="utf-8")
     return summary
 
 
-_last_full_summary: dict = {}
+_last_archive_summary: dict = {}
 
 
-def push(repo: str, since: date | None, label: str) -> bool:
+def _push(repo: str, datasets, since, card, label, private: bool) -> bool:
+    global _last_archive_summary
     from huggingface_hub import HfApi
-
-    global _last_full_summary
 
     token = os.environ.get("HF_TOKEN")
     if not token:
-        print(f"  !! HF_TOKEN not set -- skipping {label}. The git push still ran, so no "
-              f"ephemeral window was lost.", flush=True)
+        print(f"  !! HF_TOKEN not set, skipping {label}. The git push still ran, so no window "
+              f"was lost.", flush=True)
         return False
     stage = ROOT / "dist" / f"hf_{label}"
-    summary = _stage(stage, since)
+    summary = _stage(stage, datasets, since, card)
     if not summary:
         print(f"  !! nothing to push for {label}", flush=True)
         return False
     api = HfApi(token=token)
     try:
+        api.create_repo(repo_id=repo, repo_type="dataset", private=private, exist_ok=True)
         api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(stage),
                           commit_message=f"{label}: {date.today().isoformat()}")
     except Exception as exc:
-        # The workflow docstring promises this module never fails the run -- the git push
-        # already succeeded, so the window is safe and HF is re-pushed in full next time.
-        # Before this guard, an invalidated token would have crashed the step instead.
+        # Never fail the run on a publish problem: git already holds the window.
         print(f"  !! HF upload failed for {label}: {type(exc).__name__}: {str(exc)[:120]}",
               flush=True)
         return False
-    if label == "full":
-        _last_full_summary = dict(summary)
-    total = sum(summary.values())
-    print(f"  pushed {total} partitions to {repo} ({label})", flush=True)
+    if label == "archive":
+        _last_archive_summary = dict(summary)
+    print(f"  pushed {sum(summary.values())} partitions to {repo}", flush=True)
     for k, v in sorted(summary.items()):
         print(f"      {k:<30} {v:>5} files", flush=True)
     return True
 
 
-def _receipt(ok_full: bool, summary: dict) -> None:
-    """Record what was ACTUALLY uploaded. prune_git refuses to delete anything not named here,
-    so a failed push can never cost the only copy of a window."""
+def _receipt(ok: bool, summary: dict) -> None:
     import json
     (DATA / ".hf_receipt.json").write_text(json.dumps({
-        "pushed_at": date.today().isoformat(),
-        "full_ok": bool(ok_full),
-        "repo": FULL_REPO,
-        "datasets": sorted(summary),
-    }, indent=2), encoding="utf-8")
+        "pushed_at": date.today().isoformat(), "full_ok": bool(ok),
+        "repo": ARCHIVE_REPO, "datasets": sorted(summary)}, indent=2), encoding="utf-8")
 
 
 def main() -> int:
-    ok_full = push(FULL_REPO, None, "full")
-    ok_sample = push(SAMPLE_REPO, date.today() - timedelta(days=SAMPLE_DAYS), "sample")
-    _receipt(ok_full, _last_full_summary)
-    # Never fail the workflow on a push problem: the collection already succeeded and was
-    # committed to git. Losing a push is recoverable; losing a window is not.
-    return 0 if (ok_full or ok_sample) else 0
+    everything = sorted({d for p in PRODUCTS.values() for d in p["datasets"]} | ARCHIVE_ONLY)
+    ok = _push(ARCHIVE_REPO, everything, None, None, "archive", private=True)
+    _receipt(ok, _last_archive_summary)
+
+    since = date.today() - timedelta(days=SAMPLE_DAYS)
+    for name, p in PRODUCTS.items():
+        _push(f"{OWNER}/{name}", p["datasets"], since, _card(name, p), name, private=False)
+    return 0
 
 
 if __name__ == "__main__":
