@@ -112,6 +112,19 @@ Transactions that are never mined leave no trace in any archive at all.
 
 Documented because each has silently corrupted a real analysis:
 
+- **Bitcoin `dropped` rows begin 2026-08-26.** Before that date a classifier defect made drops
+  structurally impossible to record: `/tx/{id}/status` returns `confirmed: false` for a replaced
+  or evicted transaction exactly as it does for a waiting one, and the verifier read that field
+  as proof of pendency. All 1.03M rows from 2026-08-25 therefore show only
+  `mined` / `still_pending` / `unresolved`. Fixed by deciding pendency from POOL MEMBERSHIP;
+  earlier partitions are kept as-is rather than silently rewritten. (The Ethereum collector
+  always used pool membership and was never affected.)
+- **Quote-benchmark rows are what the API SERVED, not what was executable.** One captured round
+  shows LI.FI at 2,588 against 2,455/2,453 from the other two -- a served quote ~5% better than
+  the market is almost certainly not fillable. Outliers like this are kept because a provider
+  serving a bad quote is exactly what the panel exists to record; treat `spread_bps` outliers as
+  provider behaviour, not arbitrage.
+
 - **First-seen is OUR observation, not the network's.** We derive it from our own polling and never
   read a provider's own first-seen field. A transaction is first seen by the network slightly
   before we see it.
