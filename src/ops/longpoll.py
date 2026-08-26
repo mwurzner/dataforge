@@ -38,7 +38,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes
+from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -114,13 +114,20 @@ def main() -> int:
 
     tracker = e1_mempool.MempoolTracker(e1_mempool.ENDPOINTS[0])
     btc = e8_btc_mempool.BtcMempoolTracker()
+    # Litecoin rides the identical Esplora API (probed: litecoinspace.org answers the same
+    # endpoints). Tiny pool (~10 KB a poll), no second provider, so no cross-check and no
+    # divergence sampling; the frame records that honestly rather than faking a weaker claim.
+    ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
+                                           e8_btc_mempool.CHAINS["ltc"]["secondary"])
     div_rows: list[pd.DataFrame] = []
     btc_div_rows: list[pd.DataFrame] = []
     t0 = time.time()
     last_block = last_div = last_ckpt = 0.0
     last_btc = last_btc_block = last_btc_div = 0.0
     last_quote = 0.0
+    last_ltc = last_ltc_block = 0.0
     quote_rows: list[pd.DataFrame] = []
+    onramp_rows: list[pd.DataFrame] = []
     failures: list[str] = []
 
     try:
@@ -165,11 +172,26 @@ def main() -> int:
                     failures.append(f"e9: {exc}")
                 last_btc_div = now
 
+            if now - last_ltc >= BTC_POLL_S:
+                try:
+                    ltc.poll_pool()
+                except Exception as exc:
+                    failures.append(f"e11 pool: {exc}")
+                last_ltc = now
+            if now - last_ltc_block >= 150:       # Litecoin blocks arrive ~2.5 min apart
+                try:
+                    ltc.poll_blocks()
+                    ltc.verify_dropped(cap=30)
+                except Exception as exc:
+                    failures.append(f"e11 blocks: {exc}")
+                last_ltc_block = now
+
             if now - last_quote >= QUOTE_EVERY_S:
                 try:
                     quote_rows.append(e10_quotes.sample())
+                    onramp_rows.append(e12_onramp.sample())
                 except Exception as exc:
-                    failures.append(f"e10: {exc}")
+                    failures.append(f"e10/e12: {exc}")
                 last_quote = now
 
             if now - last_ckpt >= CHECKPOINT_EVERY_S:
@@ -192,6 +214,12 @@ def main() -> int:
     except Exception as exc:
         failures.append(f"reconcile: {exc}")
         still = set()
+    try:
+        ltc.poll_pool()
+        ltc.poll_blocks()
+        ltc.verify_dropped()
+    except Exception as exc:
+        failures.append(f"e11 final: {exc}")
     try:
         btc.poll_pool()
         btc.poll_blocks()
@@ -250,6 +278,23 @@ def main() -> int:
     if btc_div_rows:
         write(e8_btc_mempool.DIVERGENCE_DATASET,
               pd.concat(btc_div_rows, ignore_index=True), run_id)
+
+    ldf = ltc.frame()
+    l_observed = int(ldf["first_seen_ts"].notna().sum()) if len(ldf) else 0
+    l_drops = int((ldf["fate"] == "dropped").sum()) if len(ldf) else 0
+    if l_observed == 0 and l_drops == 0:
+        print(f"  E11: {len(ldf):,} rows but ZERO observed lifecycle -- partition refused",
+              flush=True)
+    else:
+        print(f"  E11 ltc: {len(ldf):,} txs | " +
+              " ".join(f"{k} {v:,}" for k, v in ldf["fate"].value_counts().items()), flush=True)
+        write("e11_ltc_mempool_lifecycle", ldf, run_id)
+
+    if onramp_rows:
+        odf = pd.concat(onramp_rows, ignore_index=True)
+        ok_o = odf[odf["effective_rate"].notna()]
+        print(f"  E12: {len(odf):,} on-ramp rows, {len(odf)-len(ok_o)} failed", flush=True)
+        write(e12_onramp.DATASET, odf, run_id)
 
     if quote_rows:
         qdf = pd.concat(quote_rows, ignore_index=True)
