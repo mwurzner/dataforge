@@ -172,6 +172,9 @@ def sample() -> pd.DataFrame:
     # not count as an infinitely bad price.
     df["best_provider"] = None
     df["spread_bps"] = None
+    # Pre-created so a round where no group gets >=2 answers still writes the same schema --
+    # otherwise this column exists only when the loop below assigns it, which is schema drift.
+    df["n_answered"] = pd.NA
     for key, g in df.groupby(["pair", "sell_size"], sort=False):
         ok = g[g["price"].notna()]
         if len(ok) < 2:

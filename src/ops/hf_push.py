@@ -204,8 +204,16 @@ def push(repo: str, since: date | None, label: str) -> bool:
         print(f"  !! nothing to push for {label}", flush=True)
         return False
     api = HfApi(token=token)
-    api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(stage),
-                      commit_message=f"{label}: {date.today().isoformat()}")
+    try:
+        api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(stage),
+                          commit_message=f"{label}: {date.today().isoformat()}")
+    except Exception as exc:
+        # The workflow docstring promises this module never fails the run -- the git push
+        # already succeeded, so the window is safe and HF is re-pushed in full next time.
+        # Before this guard, an invalidated token would have crashed the step instead.
+        print(f"  !! HF upload failed for {label}: {type(exc).__name__}: {str(exc)[:120]}",
+              flush=True)
+        return False
     if label == "full":
         _last_full_summary = dict(summary)
     total = sum(summary.values())
