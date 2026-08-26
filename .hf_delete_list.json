@@ -1,0 +1,9 @@
+{
+ "why": "100% pre_existing baseline rows; zero first-seen, zero drops; test dispatches",
+ "files": [
+  "e8_btc_mempool_lifecycle/2026/08/2026-08-25T1627Z.parquet",
+  "e8_btc_mempool_lifecycle/2026/08/2026-08-25T1647Z.parquet",
+  "e8_btc_mempool_lifecycle/2026/08/2026-08-25T1652Z.parquet",
+  "e8_btc_mempool_lifecycle/2026/08/2026-08-26T0021Z.parquet"
+ ]
+}
