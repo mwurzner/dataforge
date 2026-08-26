@@ -128,7 +128,7 @@ def main() -> int:
     last_quote = 0.0
     last_ltc = last_ltc_block = 0.0
     last_preconf = last_preconf_safe = last_preconf_hb = 0.0
-    last_fee = 0.0
+    last_fee = last_fee_sample = 0.0
     fee_rows: list[pd.DataFrame] = []
     quote_rows: list[pd.DataFrame] = []
     onramp_rows: list[pd.DataFrame] = []
@@ -151,6 +151,12 @@ def main() -> int:
                 last_div = now
 
             # ---- Bitcoin, on its own much slower clock ----
+            if now - last_fee_sample >= 5:     # fast: 10 newest arrivals per call
+                try:
+                    btc.poll_recent()
+                except Exception as exc:
+                    failures.append(f"e8 recent: {exc}")
+                last_fee_sample = now
             if now - last_btc >= BTC_POLL_S:
                 try:
                     btc.poll_pool()
@@ -385,6 +391,7 @@ def main() -> int:
         "btc_n_divergence_samples": len(btc_div_rows),
         "btc_n_drop_verified": btc.n_verified, "btc_n_flicker": btc.n_flicker,
         "btc_n_crosscheck_saved": btc.n_other_saved,
+        "btc_n_fee_polls": btc.n_fee_polls, "btc_n_fees_captured": len(btc.fees),
         "n_quote_rounds": len(quote_rows),
         "reconciled": bool(still), "failures": "; ".join(failures)[:500],
     }]), run_id)
