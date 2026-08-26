@@ -101,6 +101,13 @@ jobs:
           HF_OWNER: SleeveZipper
         run: python -m src.ops.hf_push
 
+      - name: Apply listed HF deletions
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: SleeveZipper
+        run: python -m src.ops.hf_delete
+
       - name: Prune git to a rolling buffer
         # The data repo grows ~165 MB/day and GitHub refuses around 5 GB, so without this the
         # pipeline stops in about five weeks. HuggingFace holds the full history; git keeps the

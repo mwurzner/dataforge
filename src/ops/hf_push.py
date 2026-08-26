@@ -62,7 +62,7 @@ EPHEMERAL = {"e0_run_manifest", "e1_mempool_lifecycle",
 
 CARD = """---
 license: odc-by
-pretty_name: DataForge mempool lifecycle panels
+pretty_name: Bitcoin and Ethereum mempool observation panels
 tags:
   - bitcoin
   - ethereum
@@ -70,89 +70,102 @@ tags:
   - blockchain
 ---
 
-# DataForge
+# DataForge mempool panels
 
-Continuous observation of the **Bitcoin and Ethereum mempools**: when each transaction was first
-seen, how long it waited, and which ones vanished without ever being mined.
+Continuous observation of the Bitcoin and Ethereum mempools: when each transaction was first
+seen, how long it waited, and which ones disappeared without being mined.
 
-## What is actually scarce here, and what is not
+A confirmed transaction keeps its body forever but loses its timing, and a transaction that is
+never mined leaves no trace in any archive. We verified this on Bitcoin before collecting
+anything: the public first-seen lookup answers for unconfirmed transactions and returns 0 once a
+transaction is mined, whether it confirmed a day, a month, or a year ago. Data of this kind can
+only be recorded while it happens.
 
-We would rather say this plainly than let a user discover it.
+The collector runs four windows of about 5.5 hours per day (roughly 22h coverage). This public
+repo carries a rolling {SAMPLE_DAYS}-day window of the mempool datasets and the full history of
+the contract-state panels. The full mempool history accumulates in a private repo; open a
+discussion here if you want access.
 
-| dataset | scarce? |
+## What is scarce here and what is not
+
+| dataset | free elsewhere? |
 |---|---|
-| `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | **Yes.** No continuously-updated free per-transaction Bitcoin mempool archive was found. The public Bitcoin tools publish mempool *size*, not per-transaction lifecycle; the one per-transaction dataset we located covers a fixed Dec 2020 - Feb 2021 window. |
-| `e1_mempool_*`, `e3_mempool_divergence` | **No.** The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, free and CC-0, since September 2023, with a wider node network than ours. Use theirs. Ours is published as an independent second observation, nothing more. |
-| `a1_*`, `a2_*`, `b2_*`, `b5_*` | **No.** Free archive endpoints serve the same contract state back years; verified at -90d, -360d and -720d on two independent endpoints. Convenience only. |
-
-## Why mempool timing cannot be reconstructed later
-
-A confirmed transaction keeps its **body** forever and loses its **timing**. We verified this
-directly on Bitcoin rather than assuming it: a first-seen timestamp is served while a transaction
-is unconfirmed and returns `0` once it is mined, at one day, thirty days and a year back alike.
-Transactions that are never mined leave no trace in any archive at all.
+| `e8_btc_mempool_lifecycle`, `e9_btc_mempool_divergence` | Not that we could find. Public Bitcoin mempool tools (Johoe, Bitcoin Visuals, blockchain.com) publish aggregate queue size, not per-transaction lifecycle. The one per-transaction dataset we located covers Dec 2020 to Feb 2021 only. |
+| `e1_*`, `e3_mempool_divergence` (Ethereum) | Yes. The [Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same measurement daily, CC-0, since September 2023, from a wider node network. Use theirs; ours is an independent second observation. |
+| `e10_quote_benchmark` | The live comparison is free anywhere (LlamaSwap etc.); a recorded time series of it is not, as far as we found. |
+| `a1_*`, `a2_*`, `b2_*`, `b5_*` (contract state) | Yes. Free archive nodes serve the same state years back; we checked at -90d, -360d and -720d on two endpoints. Kept for convenience. |
 
 ## Datasets
 
-| name | contents |
+| name | one row is |
 |---|---|
-| `e8_btc_mempool_lifecycle` | per-transaction first-seen, mined height, dwell seconds, and fate |
-| `e9_btc_mempool_divergence` | pending-set size and overlap across independent Bitcoin providers |
-| `e1_mempool_minutely` | Ethereum, per-minute: arrivals, fate counts, dwell p10/p50/p90 |
-| `e1_mempool_dropped` | Ethereum, full rows for transactions that were never mined |
-| `e1_mempool_lifecycle` | Ethereum per-transaction (historical; superseded by the two above) |
-| `e3_mempool_divergence` | pending-set size and overlap across four Ethereum nodes |
-| `e0_run_manifest` | per-run telemetry: polls, failed calls, coverage |
-| `a1_lending_market_state` | Morpho Blue market state (supply, borrow, utilisation, fee) |
-| `a2_vault_state` | ERC-4626 vault state (`convertToAssets`, `totalAssets`, `totalSupply`, fee) |
-| `b2_stuck_markets` | markets pinned at >=99% utilisation with the phantom-accrual signature |
-| `b5_dormancy` | vaults whose share price did not move -- dormant vs unobserved |
+| `e8_btc_mempool_lifecycle` | a Bitcoin transaction we observed: first seen, mined height, dwell, fate |
+| `e9_btc_mempool_divergence` | one provider's pending-set size and overlap at a sample instant |
+| `e1_mempool_minutely` | one minute of Ethereum mempool activity: arrivals, fates, dwell quantiles |
+| `e1_mempool_dropped` | an Ethereum transaction that was never mined, full detail |
+| `e3_mempool_divergence` | one Ethereum node's pending view at a sample instant, versus three others |
+| `e10_quote_benchmark` | one swap quote from one aggregator (LI.FI, KyberSwap, CoW), with fee split out |
+| `e0_run_manifest` | one collection window: polls, failures, coverage counters |
+| `a1_lending_market_state` | one Morpho market's supply/borrow/utilisation at the daily block |
+| `a2_vault_state` | one ERC-4626 vault's share price and totals at the daily block |
+| `b2_stuck_markets` | one market tested against the stuck signature (>=99% utilisation, rising price) |
+| `b5_dormancy` | one vault tested for an unmoved share price |
 
-## Known artifacts
+Partitions are parquet, one file per collection window, under `dataset/YYYY/MM/`.
 
-Documented because each has silently corrupted a real analysis:
+```python
+from huggingface_hub import snapshot_download
+import pandas as pd, glob
 
-- **Bitcoin `dropped` rows begin 2026-08-26.** Before that date a classifier defect made drops
-  structurally impossible to record: `/tx/{id}/status` returns `confirmed: false` for a replaced
-  or evicted transaction exactly as it does for a waiting one, and the verifier read that field
-  as proof of pendency. All 1.03M rows from 2026-08-25 therefore show only
-  `mined` / `still_pending` / `unresolved`. Fixed by deciding pendency from POOL MEMBERSHIP;
-  earlier partitions are kept as-is rather than silently rewritten. (The Ethereum collector
-  always used pool membership and was never affected.)
-- **Quote-benchmark rows are what the API SERVED, not what was executable.** One captured round
-  shows LI.FI at 2,588 against 2,455/2,453 from the other two -- a served quote ~5% better than
-  the market is almost certainly not fillable. Outliers like this are kept because a provider
-  serving a bad quote is exactly what the panel exists to record; treat `spread_bps` outliers as
-  provider behaviour, not arbitrage.
+path = snapshot_download("SleeveZipper/dataforge-sample", repo_type="dataset",
+                         allow_patterns="e8_btc_mempool_lifecycle/**")
+df = pd.concat(map(pd.read_parquet, glob.glob(f"{path}/e8_btc_mempool_lifecycle/**/*.parquet",
+                                              recursive=True)))
+```
 
-- **First-seen is OUR observation, not the network's.** We derive it from our own polling and never
-  read a provider's own first-seen field. A transaction is first seen by the network slightly
-  before we see it.
-- **Transactions already pending when a run starts are marked `pre_existing` and carry a NULL
-  first-seen.** Their true arrival is earlier than anything we can observe, and stamping our start
-  time on them would fabricate a dwell time.
-- **Two dwell measurements on Ethereum.** `dwell_seconds` uses the block's `timestamp` field, which
-  is the *proposer's* clock, so it mixes two clocks and can read 0. `dwell_seconds_local` uses the
-  time we observed the block, so both ends share one clock; it is fresh when `lag_blocks == 0` and
-  late by roughly 12s per block above that. Filter on `lag_blocks == 0` for timing work.
-- **Mempool observations are node-local.** `dropped` means absent from the observing node's pool
-  and never mined in the observation window. Retention is a node policy: Bitcoin Core evicts after
-  336h by default, yet our Bitcoin provider served 115-day-old entries. `e9` measures the
-  disagreement between providers instead of hiding it.
-- **Bitcoin dwell times are enormous.** A random 40 of the live mempool had a median age of ~107
-  days, against Ethereum dwell times of seconds to minutes. Bitcoin carries a large standing
-  backlog of fee-starved transactions; this is a real property, not a collection error.
-- **Base has no public mempool.** It runs a centralised sequencer, so there is nothing to observe.
-- **Ethereum is stored as per-minute aggregates from 2026-08-25.** Per-transaction rows were 85%
-  of this project's entire storage for the one dataset that is freely available elsewhere, so E1
-  now keeps a minute-level distribution plus full rows for the never-mined transactions. If you
-  want per-transaction Ethereum data, the Flashbots Dumpster is better than ours was and free.
+## Caveats that matter
+
+Read these before building on the data. Each one exists because it bit us first.
+
+- `first_seen_ts` is our observation on our clock, derived from our own polling. The network saw
+  the transaction slightly earlier. We never copy a provider's own first-seen field.
+- Rows with `pre_existing = true` were already in the pool when a window started. Their true
+  arrival time is unknowable, so `first_seen_ts` is null there rather than a fabricated value.
+- Bitcoin `fate = "dropped"` starts 2026-08-26. Before that a classifier defect made drops
+  impossible to record (a status endpoint reports `confirmed: false` for replaced and waiting
+  transactions alike, and we mistook that for pendency). Partitions from 2026-08-25 are kept
+  as collected rather than rewritten.
+- A drop is claimed only after the transaction is absent from the chain, absent from two
+  providers' pools, and absent for ten consecutive polls. Anything weaker was measurably wrong:
+  a naive poll diff fabricated 642 "drops" in 200 seconds, all still pending on inspection.
+- Mempools are node-local. Retention is a node policy, not a protocol rule; our provider served
+  115-day-old entries while Bitcoin Core defaults to eviction after 336 hours. `e9` records how
+  much two providers disagree (typically several thousand transactions at any instant).
+- Bitcoin dwell times are long. Median around 10 minutes for transactions that confirm quickly,
+  but the pool carries a standing backlog with a median age over 100 days. This is a property
+  of Bitcoin's fee market, not a collection error.
+- Ethereum has two dwell columns. `dwell_seconds` uses the block's own timestamp (the proposer's
+  clock); `dwell_seconds_local` uses ours at observation. For timing work filter
+  `lag_blocks == 0`, where the local reading is fresh.
+- Ethereum is stored as per-minute aggregates plus full rows for never-mined transactions, from
+  2026-08-25 onward. For per-transaction Ethereum data use the Flashbots Dumpster.
+- Quote rows record what each aggregator served, not what was fillable. One captured round has
+  LI.FI 5% above the other two providers; treat outliers as provider behaviour. LI.FI quotes
+  include their 25 bps service fee, reported separately in `fee_usd`.
+- Base (the L2) has no public mempool to observe; it runs a centralised sequencer.
 
 ## Coverage
 
-The collector runs four times daily for ~5.5h each (~22h/day). Gaps are real, are recorded in
-`e0_run_manifest`, and cannot be repaired -- an unobserved minute is unobservable forever.
+`e0_run_manifest` records every window with poll counts and failure counts. Gaps between windows
+are real and cannot be repaired afterwards; nothing is interpolated.
+
+## License and contact
+
+ODC-BY: use freely, attribute "DataForge (SleeveZipper)". Questions and access requests via the
+discussions tab.
 """
+
+CARD = CARD.replace("{SAMPLE_DAYS}", str(SAMPLE_DAYS))
 
 
 def _partitions(dataset: str) -> list[Path]:

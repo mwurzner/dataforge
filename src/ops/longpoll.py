@@ -230,6 +230,17 @@ def main() -> int:
         write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True), run_id)
 
     bdf = btc.frame()
+    # A SHORT RUN OBSERVES NOTHING. The first polls establish a baseline of pre-existing
+    # transactions whose first_seen is unobservable; only what arrives AFTER that is lifecycle.
+    # Four early test dispatches published ~80k-row partitions that were 100% baseline -- the
+    # standing pool re-listed, with zero first-seen rows and zero drops. Pure noise in the
+    # product dataset. A frame with no observed arrivals and no resolved drops is refused.
+    observed = int(bdf["first_seen_ts"].notna().sum()) if len(bdf) else 0
+    n_drops = int((bdf["fate"] == "dropped").sum()) if len(bdf) else 0
+    if observed == 0 and n_drops == 0:
+        print(f"  E8: {len(bdf):,} rows but ZERO observed lifecycle (all baseline) -- "
+              f"partition refused, window too short", flush=True)
+        bdf = bdf.iloc[0:0]
     if len(bdf):
         print(f"  E8: {len(bdf):,} txs | " +
               " ".join(f"{k} {v:,}" for k, v in bdf["fate"].value_counts().items()) +
