@@ -78,18 +78,20 @@ tags:
 Continuous observation of the Bitcoin and Ethereum mempools: when each transaction was first
 seen, how long it waited, and which ones disappeared without being mined.
 
-A confirmed transaction keeps its body forever but loses its timing, and a transaction that is
-never mined leaves no trace in any archive. We verified this on Bitcoin before collecting
-anything: the public first-seen lookup answers for unconfirmed transactions and returns 0 once a
-transaction is mined, whether it confirmed a day, a month, or a year ago. Data of this kind can
-only be recorded while it happens.
+A confirmed transaction keeps its body forever but loses its timing, and one that is never mined
+leaves no trace at all. We checked this on Bitcoin before collecting anything: the public
+first-seen lookup answers while a transaction is unconfirmed and returns 0 once it is mined,
+whether that was a day ago or a year ago. So it gets recorded as it happens or not at all.
 
 The collector runs four windows of about 5.5 hours per day (roughly 22h coverage). This public
 repo carries a rolling {SAMPLE_DAYS}-day window of the mempool datasets and the full history of
 the contract-state panels. The full mempool history accumulates in a private repo; open a
 discussion here if you want access.
 
-## What is scarce here and what is not
+## Which of these are hard to get elsewhere
+
+Some of this is freely available from better sources. Where that is true it says so, and points
+you there.
 
 | dataset | free elsewhere? |
 |---|---|
@@ -133,35 +135,35 @@ df = pd.concat(map(pd.read_parquet, glob.glob(f"{path}/e8_btc_mempool_lifecycle/
                                               recursive=True)))
 ```
 
-## Caveats that matter
+## Before you build on this
 
-Read these before building on the data. Each one exists because it bit us first.
+Most of these came out of getting something wrong first.
 
-- `first_seen_ts` is our observation on our clock, derived from our own polling. The network saw
-  the transaction slightly earlier. We never copy a provider's own first-seen field.
+- `first_seen_ts` is when WE saw it, on our clock, from our own polling. The network saw it a
+  little earlier. We never copy a provider's own first-seen field.
 - Rows with `pre_existing = true` were already in the pool when a window started. Their true
   arrival time is unknowable, so `first_seen_ts` is null there rather than a fabricated value.
 - Bitcoin `fate = "dropped"` starts 2026-08-26. Before that a classifier defect made drops
   impossible to record (a status endpoint reports `confirmed: false` for replaced and waiting
   transactions alike, and we mistook that for pendency). Partitions from 2026-08-25 are kept
   as collected rather than rewritten.
-- A drop is claimed only after the transaction is absent from the chain, absent from two
-  providers' pools, and absent for ten consecutive polls. Anything weaker was measurably wrong:
-  a naive poll diff fabricated 642 "drops" in 200 seconds, all still pending on inspection.
+- We only call something dropped once it is missing from the chain, missing from two providers'
+  pools, and missing for ten polls running. Weaker tests do not work: a plain poll-to-poll diff
+  invented 642 "drops" in 200 seconds and every one we checked was still in the mempool.
 - Mempools are node-local. Retention is a node policy, not a protocol rule; our provider served
   115-day-old entries while Bitcoin Core defaults to eviction after 336 hours. `e9` records how
   much two providers disagree (typically several thousand transactions at any instant).
-- Bitcoin dwell times are long. Median around 10 minutes for transactions that confirm quickly,
-  but the pool carries a standing backlog with a median age over 100 days. This is a property
-  of Bitcoin's fee market, not a collection error.
+- Bitcoin dwell times are long. Around 10 minutes for transactions that confirm quickly, but the
+  pool also holds a standing backlog whose median age is over 100 days. That is Bitcoin's fee
+  market, not a collection error.
 - Ethereum has two dwell columns. `dwell_seconds` uses the block's own timestamp (the proposer's
   clock); `dwell_seconds_local` uses ours at observation. For timing work filter
   `lag_blocks == 0`, where the local reading is fresh.
 - Ethereum is stored as per-minute aggregates plus full rows for never-mined transactions, from
   2026-08-25 onward. For per-transaction Ethereum data use the Flashbots Dumpster.
-- Quote rows record what each aggregator served, not what was fillable. One captured round has
-  LI.FI 5% above the other two providers; treat outliers as provider behaviour. LI.FI quotes
-  include their 25 bps service fee, reported separately in `fee_usd`.
+- Quote rows are what each aggregator served, which is not what you could have filled. One round
+  has LI.FI 5% above the other two; read outliers as provider behaviour rather than free money.
+  LI.FI quotes include their 25 bps fee, split out into `fee_usd`.
 - Remittance quotes have a sparse partial precedent: the Wayback Machine holds occasional
   captures of Wise's comparison pages and at least one of the comparison API itself (2022). Those
   are scattered single points, not a panel, but this dataset is "denser than anything that
