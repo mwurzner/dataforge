@@ -38,7 +38,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp
+from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp, e13_remit
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -128,6 +128,7 @@ def main() -> int:
     last_ltc = last_ltc_block = 0.0
     quote_rows: list[pd.DataFrame] = []
     onramp_rows: list[pd.DataFrame] = []
+    remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
 
     try:
@@ -190,8 +191,9 @@ def main() -> int:
                 try:
                     quote_rows.append(e10_quotes.sample())
                     onramp_rows.append(e12_onramp.sample())
+                    remit_rows.append(e13_remit.sample())
                 except Exception as exc:
-                    failures.append(f"e10/e12: {exc}")
+                    failures.append(f"e10/e12/e13: {exc}")
                 last_quote = now
 
             if now - last_ckpt >= CHECKPOINT_EVERY_S:
@@ -295,6 +297,14 @@ def main() -> int:
         ok_o = odf[odf["effective_rate"].notna()]
         print(f"  E12: {len(odf):,} on-ramp rows, {len(odf)-len(ok_o)} failed", flush=True)
         write(e12_onramp.DATASET, odf, run_id)
+
+    if remit_rows:
+        rdf = pd.concat(remit_rows, ignore_index=True)
+        okr = rdf[rdf["provider"].notna()]
+        print(f"  E13: {len(okr):,} remittance quotes across "
+              f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
+              flush=True)
+        write(e13_remit.DATASET, rdf, run_id)
 
     if quote_rows:
         qdf = pd.concat(quote_rows, ignore_index=True)
