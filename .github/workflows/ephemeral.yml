@@ -24,12 +24,17 @@ on:
     - cron: '7 6 * * *'
     - cron: '7 12 * * *'
     - cron: '7 18 * * *'
+  # WINDOW LENGTH IS 4.5h, NOT 5.5h, and the reason is scheduling jitter rather than the job
+  # limit. Observed start delays on this repo run 50 minutes to 1.8 hours against the cron time,
+  # so a 5.5h window inside a 6h slot regularly overran into the next slot; the concurrency group
+  # then dropped the later trigger and a whole window was skipped. 4.5h leaves ~1.5h of slack, so
+  # four windows a day actually run instead of three unpredictably landing.
   workflow_dispatch:
     inputs:
       duration_s:
         description: 'Run duration in seconds (default 19800 = 5.5h)'
         required: false
-        default: '19800'
+        default: '16200'
 
 concurrency:
   # Windows must not overlap: two collectors would double-write the same run partition and
@@ -64,7 +69,7 @@ jobs:
         id: collect
         continue-on-error: true      # always push what was collected before judging the run
         env:
-          DF_DURATION_S: ${{ github.event.inputs.duration_s || '19800' }}
+          DF_DURATION_S: ${{ github.event.inputs.duration_s || '16200' }}
           DF_POLL_S: '5'
           DF_DIVERGENCE_EVERY_S: '300'
           DF_CHECKPOINT_EVERY_S: '1800'

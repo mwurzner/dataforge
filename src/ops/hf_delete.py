@@ -25,8 +25,14 @@ def main() -> int:
     from huggingface_hub import HfApi
     api = HfApi(token=token)
     owner = os.environ.get("HF_OWNER", "SleeveZipper")
-    for repo in (f"{owner}/dataforge-ephemeral", f"{owner}/dataforge-sample"):
-        existing = set(api.list_repo_files(repo_id=repo, repo_type="dataset"))
+    for repo in (f"{owner}/dataforge-ephemeral",):
+        try:
+            existing = set(api.list_repo_files(repo_id=repo, repo_type="dataset"))
+        except Exception as exc:
+            # A repo that is gone cannot hold anything we need to delete. Failing the whole
+            # run over it marked four otherwise-healthy collections as failures.
+            print(f"  {repo}: unreachable ({type(exc).__name__}), skipping", flush=True)
+            continue
         for f in files:
             if f in existing:
                 api.delete_file(path_in_repo=f, repo_id=repo, repo_type="dataset",
