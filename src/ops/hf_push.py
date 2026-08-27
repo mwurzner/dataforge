@@ -80,7 +80,7 @@ WINDOWED = {
     "e3_mempool_divergence", "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
     "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
-    "e16_dex_routes",
+    "e16_dex_routes", "e17_perp_depth",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -173,7 +173,8 @@ Most of these came out of getting something wrong first.
 """,
     },
     "crypto-execution-costs": {
-        "datasets": ["e10_quote_benchmark", "e16_dex_routes", "e12_onramp_quotes",
+        "datasets": ["e10_quote_benchmark", "e16_dex_routes", "e17_perp_depth",
+                     "e12_onramp_quotes",
                      "e14_l2_preconf", MANIFEST],
         "example": "e10_quote_benchmark",
         "pretty": "Crypto execution costs: DEX quotes, fiat on-ramps, L2 confirmation",
@@ -195,6 +196,7 @@ could find.
 | name | one row is |
 |---|---|
 | `e10_quote_benchmark` | one swap quote from LI.FI, KyberSwap or CoW, at a fixed size, fee split out |
+| `e17_perp_depth` | one order-book snapshot from a perp DEX: spread, level counts, and resting notional within 5/10/25/50/100 bps of mid |
 | `e16_dex_routes` | one leg of the route a router chose: venue, pool, amount, and how many venues the trade was split across |
 | `e12_onramp_quotes` | one retail fiat on-ramp quote, buy or sell |
 | `e14_l2_preconf` | an L2 heartbeat (unsafe vs safe head) or a sequencer promise the chain replaced |
@@ -208,6 +210,12 @@ could find.
   venues too small for volume rankings, and the split widens sharply with size: one round put
   WBTC/USDC through a single venue at 0.01 BTC and ten venues at 10 BTC. Only KyberSwap exposes
   a leg breakdown; the others contribute the venue name alone.
+- `e17_perp_depth` covers Aevo and Paradex, second-tier perpetual DEXs that no depth archive
+  carries -- Tardis lists 64 exchanges and includes dydx, dydx-v4 and hyperliquid but neither of
+  these. Neither venue serves its own history either. Rows are SNAPSHOTS at the poll interval,
+  not a tick-level book, so a move that reverses between polls is invisible. Depth is cumulative
+  resting notional within a band of mid; where the spread is wider than the band the value is
+  correctly zero, which happens often on the thinner markets.
 - Quote rows are what each aggregator served, which is not what you could have filled. One round
   has LI.FI 5% above the other two; read outliers as provider behaviour rather than free money.
 - LI.FI applies a fixed fee of about 25 bps at every size. It is split into `fee_usd` precisely
