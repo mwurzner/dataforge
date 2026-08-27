@@ -8,7 +8,7 @@ Every candidate dataset checked against the scarcity criterion, and why it faile
 
 Kept because it is the most reusable thing this project has produced. The recurring shape:
 **if a dataset is valuable and accessible, a vendor has already built it.** What survives sits
-where the buyer base is real but unformed. Hit rate to date: **4 built and 1 cleared of 19 checked.**
+where the buyer base is real but unformed. Hit rate to date: **5 built of 20 checked.**
 
 The discipline, in order, and it is not negotiable — three of the four surviving datasets were
 found this way, and the one that was not had to be withdrawn:
@@ -41,6 +41,7 @@ found this way, and the one that was not had to be withdrawn:
 | 17 | **npm / PyPI yanked releases** | see below |
 | 18 | **Kalshi order book depth** | see below |
 | 19 | **stablecoin issuer mint/redeem latency** | see below |
+| 20 | **stock borrow fees / short availability** | see below |
 
 ## 17 — npm / PyPI yanked releases (killed 2026-08-27)
 
@@ -93,6 +94,29 @@ only public responses are a ping and reserve totals (Paxos markets, Tether trans
 sheets, not queue state.
 
 Same class as candidate 12, bank deposit rates: the obstacle is collection, not competition.
+
+## 20 — stock borrow fees / short availability (killed 2026-08-27)
+
+Picked as the B6 non-crypto wildcard, on the reasoning that borrow rates are *quote-shaped* — the
+same shape that makes the remittance panel work — and that borrow cost is among the highest-value
+non-crypto signals that is plausibly free.
+
+**Dead on both axes simultaneously, which no other candidate managed.**
+
+*The source retains it:* IBKR's own Short Stock Availability Tool exposes historical indicative
+borrow rates and exports them as CSV.
+
+*And vendors cover it:* QuantRocket archives IBKR borrow fees back to **2018**, updated daily;
+IBorrowDesk keeps historical charts of the same feed; OptionMetrics IvyDB Borrow Rate runs from
+**January 2016** across the OPRA universe.
+
+The file that prompted the idea — IBKR's `ftp3.interactivebrokers.com` shortable-securities dump —
+*is* genuinely ephemeral, and IBKR keeps no history of it. That turned out not to matter: a file
+being overwritten is irrelevant when the same numbers are published, and archived, in three other
+places. **Ephemerality of one delivery channel is not scarcity of the data.** Worth keeping as a
+distinct failure mode from the others on this list.
+
+Cost to kill: one search.
 
 ## Survived
 
