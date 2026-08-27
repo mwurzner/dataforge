@@ -44,9 +44,21 @@ ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, ne
 #
 # A frozen week shows schema, coverage and quality, and returning weekly yields nothing new.
 #
-# SAMPLE_END is unset for now: until a month exists there is no representative week to pin (the
-# sample should show a busy fee period and a quiet one, not three thin days), so the window stays
-# anchored at the first day collected and simply stops advancing. Set DF_SAMPLE_END to pin it.
+# RE-PINNED QUARTERLY, and that cadence is the compromise. A window frozen forever eventually
+# looks abandoned: a browser arriving in December sees August files and assumes the project died.
+# A window that moves weekly leaks the whole backlog. Re-pinning four times a year gives up about
+# 28 days of 365 (~8%) and keeps a recent week on display.
+#
+# The dates are EXPLICIT rather than computed. The entire point is that the sample does not move,
+# and date arithmetic against "today" is exactly how it would start moving again by accident.
+# Changing two strings four times a year cannot go subtly wrong.
+#
+#   NEXT RE-PIN: 2026-10-01, to a representative week of September.
+#   Pick a week showing both a busy and a quiet fee period, not seven flat days.
+#
+# The repo does not look dead between re-pins: the run manifest publishes in full on every run,
+# so HF's "updated" timestamp stays current and the coverage table shows collection through
+# yesterday even while the sample data itself is fixed.
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 SAMPLE_START = os.environ.get("DF_SAMPLE_START", "2026-08-25")
 SAMPLE_END = os.environ.get("DF_SAMPLE_END", "")
