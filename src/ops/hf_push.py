@@ -17,8 +17,8 @@ available elsewhere (Morpho lending state, which any archive node serves). Publi
 add clutter to whichever product they were bolted onto without giving a reader anything they
 could not already get.
 
-WINDOWING. Public repos carry a rolling window of the ephemeral panels; the accumulated history
-stays private. The run manifest is exempt and always published in full: it holds no measurements,
+WINDOWING. Public repos carry a FIXED sample of the ephemeral panels; the accumulated history
+stays private. The sample does not advance, so it cannot be accumulated week by week. The run manifest is exempt and always published in full: it holds no measurements,
 only what was collected and when, and a coverage record you cannot inspect is worth nothing.
 """
 from __future__ import annotations
@@ -35,7 +35,30 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 OWNER = os.environ.get("HF_OWNER", "SleeveZipper")
 ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, never browsed
+# THE PUBLIC SAMPLE IS FROZEN, NOT ROLLING, and that distinction is the business model.
+#
+# A rolling window leaks everything. Anyone downloading once a week accumulates the whole history
+# for free, because next week's window holds days last week's did not. A rolling sample withholds
+# a backlog only from someone who is not paying attention, which is exactly the wrong assumption
+# about the one visitor who cares enough to come back.
+#
+# A frozen week shows schema, coverage and quality, and returning weekly yields nothing new.
+#
+# SAMPLE_END is unset for now: until a month exists there is no representative week to pin (the
+# sample should show a busy fee period and a quiet one, not three thin days), so the window stays
+# anchored at the first day collected and simply stops advancing. Set DF_SAMPLE_END to pin it.
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
+SAMPLE_START = os.environ.get("DF_SAMPLE_START", "2026-08-25")
+SAMPLE_END = os.environ.get("DF_SAMPLE_END", "")
+
+
+def sample_window() -> tuple[str, str]:
+    """The fixed inclusive [start, end] the public repos publish. Never derived from today."""
+    from datetime import date as _d, timedelta as _t
+    if SAMPLE_END:
+        return SAMPLE_START, SAMPLE_END
+    y, m, d = (int(x) for x in SAMPLE_START.split("-"))
+    return SAMPLE_START, (_d(y, m, d) + _t(days=SAMPLE_DAYS - 1)).isoformat()
 
 MANIFEST = "e0_run_manifest"
 # Held back from the public window. The manifest is deliberately absent: it is the coverage
@@ -226,6 +249,7 @@ def _card(name: str, p: dict) -> str:
     tags = "\n".join(f"  - {t}" for t in p["tags"])
     repo = f"{OWNER}/{name}"
     ex = p["example"]
+    _w = sample_window()
     load = (
         "\n```python\n"
         "from huggingface_hub import snapshot_download\n"
@@ -245,8 +269,10 @@ def _card(name: str, p: dict) -> str:
             f"size_categories:\n  - {p['size']}\n---\n\n"
             + p["body"]
             + f"\nPartitions are parquet, one file per collection window, under "
-              f"`dataset/YYYY/MM/`. This repo carries a rolling {SAMPLE_DAYS}-day window of the "
-              f"panels above; the accumulated history is held privately.\n"
+              f"`dataset/YYYY/MM/`. This repo carries a FIXED {SAMPLE_DAYS}-day sample "
+              f"({_w[0]} to {_w[1]}) so you can check schema, coverage and quality before "
+              f"asking for more. It does not advance, so there is nothing to gain by "
+              f"re-downloading it. The full history is held privately, available on request.\n"
             + load + _SHARED_TAIL)
 
 
@@ -255,15 +281,17 @@ def _partitions(dataset: str) -> list[Path]:
     return sorted(root.rglob("*.parquet")) if root.exists() else []
 
 
-def _stage(target: Path, datasets, since: date | None, card: str | None) -> dict:
+def _stage(target: Path, datasets, window, card: str | None) -> dict:
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
     summary = {}
     for ds in datasets:
         files = _partitions(ds)
-        if since is not None and ds in WINDOWED:
-            files = [f for f in files if f.stem[:10] >= since.isoformat()]
+        if window is not None and ds in WINDOWED:
+            lo, hi = window
+            # Stems are YYYY-MM-DD or YYYY-MM-DDTHHMMZ; both compare correctly as strings.
+            files = [f for f in files if lo <= f.stem[:10] <= hi]
         if not files:
             continue
         for f in files:
@@ -279,7 +307,7 @@ def _stage(target: Path, datasets, since: date | None, card: str | None) -> dict
 _last_archive_summary: dict = {}
 
 
-def _push(repo: str, datasets, since, card, label, private: bool) -> bool:
+def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
     global _last_archive_summary
     from huggingface_hub import HfApi
 
@@ -289,7 +317,7 @@ def _push(repo: str, datasets, since, card, label, private: bool) -> bool:
               f"was lost.", flush=True)
         return False
     stage = ROOT / "dist" / f"hf_{label}"
-    summary = _stage(stage, datasets, since, card)
+    summary = _stage(stage, datasets, window, card)
     if not summary:
         print(f"  !! nothing to push for {label}", flush=True)
         return False
@@ -323,9 +351,10 @@ def main() -> int:
     ok = _push(ARCHIVE_REPO, everything, None, None, "archive", private=True)
     _receipt(ok, _last_archive_summary)
 
-    since = date.today() - timedelta(days=SAMPLE_DAYS)
+    window = sample_window()
+    print(f"  public sample is FROZEN at {window[0]} to {window[1]}", flush=True)
     for name, p in PRODUCTS.items():
-        _push(f"{OWNER}/{name}", p["datasets"], since, _card(name, p), name, private=False)
+        _push(f"{OWNER}/{name}", p["datasets"], window, _card(name, p), name, private=False)
     return 0
 
 
