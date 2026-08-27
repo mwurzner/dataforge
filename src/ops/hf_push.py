@@ -80,6 +80,7 @@ WINDOWED = {
     "e3_mempool_divergence", "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
     "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
+    "e16_dex_routes",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -172,7 +173,8 @@ Most of these came out of getting something wrong first.
 """,
     },
     "crypto-execution-costs": {
-        "datasets": ["e10_quote_benchmark", "e12_onramp_quotes", "e14_l2_preconf", MANIFEST],
+        "datasets": ["e10_quote_benchmark", "e16_dex_routes", "e12_onramp_quotes",
+                     "e14_l2_preconf", MANIFEST],
         "example": "e10_quote_benchmark",
         "pretty": "Crypto execution costs: DEX quotes, fiat on-ramps, L2 confirmation",
         "tags": ["defi", "dex", "execution-cost", "slippage", "onramp", "ethereum",
@@ -193,12 +195,19 @@ could find.
 | name | one row is |
 |---|---|
 | `e10_quote_benchmark` | one swap quote from LI.FI, KyberSwap or CoW, at a fixed size, fee split out |
+| `e16_dex_routes` | one leg of the route a router chose: venue, pool, amount, and how many venues the trade was split across |
 | `e12_onramp_quotes` | one retail fiat on-ramp quote, buy or sell |
 | `e14_l2_preconf` | an L2 heartbeat (unsafe vs safe head) or a sequencer promise the chain replaced |
 | `e0_run_manifest` | one collection window: polls, failures, coverage counters |
 
 ## Before you build on this
 
+- `e16_dex_routes` records the route a router picked for a trade nobody placed. Executed swaps
+  are on-chain forever; a quoted route for a hypothetical size is computed on demand and kept by
+  nobody, so this maps where routable liquidity sits rather than where volume went. It surfaces
+  venues too small for volume rankings, and the split widens sharply with size: one round put
+  WBTC/USDC through a single venue at 0.01 BTC and ten venues at 10 BTC. Only KyberSwap exposes
+  a leg breakdown; the others contribute the venue name alone.
 - Quote rows are what each aggregator served, which is not what you could have filled. One round
   has LI.FI 5% above the other two; read outliers as provider behaviour rather than free money.
 - LI.FI applies a fixed fee of about 25 bps at every size. It is split into `fee_usd` precisely
