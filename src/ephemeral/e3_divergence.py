@@ -47,6 +47,38 @@ def _pending_hashes(url: str) -> tuple[set[str], str | None, float]:
         return set(), f"{type(exc).__name__}", time.time() - t0
 
 
+def _gas(url: str) -> tuple[float | None, float | None]:
+    """eth_gasPrice and eth_maxPriorityFeePerGas, in gwei, from one endpoint."""
+    out = []
+    for method in ("eth_gasPrice", "eth_maxPriorityFeePerGas"):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": []}).encode()
+        try:
+            d = json.load(urllib.request.urlopen(
+                urllib.request.Request(url, data=body, headers=HDRS), timeout=15))
+            r = d.get("result")
+            out.append(int(r, 16) / 1e9 if r else None)
+        except Exception:
+            out.append(None)
+    return out[0], out[1]
+
+
+def _owlracle() -> float | None:
+    """One genuinely independent estimator, keyless. The public RPCs mostly share geth's own
+    calculation and agree to the wei, so without an outside opinion this panel would be
+    measuring one implementation against itself."""
+    try:
+        d = json.load(urllib.request.urlopen(urllib.request.Request(
+            "https://api.owlracle.info/v4/eth/gas",
+            headers={"User-Agent": HDRS["User-Agent"]}), timeout=15))
+        speeds = d.get("speeds") or []
+        if speeds:
+            v = speeds[len(speeds) // 2]
+            return v.get("maxFeePerGas") or v.get("gasPrice")
+    except Exception:
+        return None
+    return None
+
+
 def sample() -> pd.DataFrame:
     """One simultaneous read across all endpoints. Rows are per-endpoint, with the pairwise
     overlap recorded against the union so divergence is reconstructable later."""
@@ -72,4 +104,22 @@ def sample() -> pd.DataFrame:
         # Transactions THIS node saw that no other node did -- the actual divergence signal.
         r["n_unique_to_this_node"] = len(own - others)
         r["share_of_union"] = (len(own) / len(union)) if union else None
-    return pd.DataFrame(rows)
+        # GAS ADVICE, alongside the pending-set view. Endpoints disagree here too, and unlike
+        # the pending set nobody records it: one probe found 8.26x between the cheapest and
+        # dearest eth_gasPrice at the same instant. Read it knowing that most public RPCs return
+        # geth's own number to the wei, so the spread is usually one dissenting endpoint rather
+        # than a survey of independent opinions. Owlracle is added as an outside estimator for
+        # exactly that reason and appears as its own row.
+        g, pri = _gas(ENDPOINTS[name])
+        r["gas_price_gwei"] = g
+        r["priority_fee_gwei"] = pri
+    owl = _owlracle()
+    rows.append({"sampled_ts": ts, "endpoint": "owlracle", "n_pending": None,
+                 "latency_s": None, "error": None if owl else "no estimate",
+                 "n_union": len(union), "n_intersection": len(inter),
+                 "n_unique_to_this_node": None, "share_of_union": None,
+                 "gas_price_gwei": owl, "priority_fee_gwei": None})
+    df = pd.DataFrame(rows)
+    gp = pd.to_numeric(df["gas_price_gwei"], errors="coerce").dropna()
+    df["gas_spread_ratio"] = round(float(gp.max() / gp.min()), 3) if len(gp) > 1 and gp.min() else None
+    return df
