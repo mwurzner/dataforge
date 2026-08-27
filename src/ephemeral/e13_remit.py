@@ -35,16 +35,34 @@ DATASET = "e13_remittance_quotes"
 HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json"}
 
 # (source, target, send_amount). High-volume lanes per World Bank flows, plus EUR/USD.
+# Twenty of the largest World Bank remittance lanes. Chosen as the moderate expansion: ~20
+# requests per round against a free endpoint is ordinary client traffic, where the aggressive
+# option (35+ corridors with tiered amounts) risked a block that would cost the whole panel.
+# Codes here are CURRENCIES, not countries: an early version used GTM/DOM/VNM/NGA/
+# MAR/POL/UKR/PAK and ten of eleven new corridors silently returned nothing.
+# Corridors added later simply start later; the manifest already makes that visible, and no
+# existing series is disturbed.
 CORRIDORS = [
     ("USD", "MXN", 500),
     ("USD", "INR", 500),
     ("USD", "PHP", 500),
+    ("USD", "GTQ", 500),
+    ("USD", "DOP", 500),
+    ("USD", "VND", 500),
+    ("USD", "NGN", 500),
+    ("USD", "COP", 500),
+    ("USD", "BRL", 500),
     ("EUR", "USD", 1000),
     ("EUR", "INR", 1000),
+    ("EUR", "TRY", 500),
+    ("EUR", "MAD", 500),
+    ("EUR", "PLN", 500),
+    ("EUR", "UAH", 500),
+    ("EUR", "NGN", 500),
     ("GBP", "EUR", 1000),
     ("GBP", "INR", 1000),
-    ("EUR", "TRY", 500),
-    ("USD", "COP", 500),
+    ("GBP", "PKR", 500),
+    ("GBP", "NGN", 500),
 ]
 
 

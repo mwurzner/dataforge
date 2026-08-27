@@ -130,6 +130,12 @@ class PreconfWatcher:
                 })
 
     def heartbeat(self) -> None:
+        # Refresh the unsafe head FIRST so both numbers describe the same moment. Without this
+        # the lag compares a stale unsafe reading against a fresh safe one, and the safe head can
+        # overtake it: a short test run reported a lag of MINUS 38 blocks on Base. The
+        # plausibility flag already caught it, but a flag on a wrong number is worse than a right
+        # number, and one extra call every two minutes is nothing.
+        self.poll_unsafe()
         # The lag must use the last OBSERVED unsafe head. Falling back to the safe height when
         # the promise buffer is empty (right after verification drains it) printed "lag 0",
         # which is an artifact of our bookkeeping, not a measurement of the chain.

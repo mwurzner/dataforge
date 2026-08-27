@@ -151,7 +151,10 @@ def main() -> int:
                 last_div = now
 
             # ---- Bitcoin, on its own much slower clock ----
-            if now - last_fee_sample >= 5:     # fast: 10 newest arrivals per call
+            # 2s, not 5s. /mempool/recent returns the 10 newest arrivals for ~1 KB, so a faster
+            # cadence lifts fee coverage of observed arrivals from ~19% toward ~45%, which feeds
+            # straight into the fee-accuracy study, the only real RESULT this project has.
+            if now - last_fee_sample >= 2:
                 try:
                     btc.poll_recent()
                 except Exception as exc:
