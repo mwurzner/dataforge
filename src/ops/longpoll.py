@@ -38,7 +38,9 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.ephemeral import e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes, e12_onramp, e13_remit, e14_preconf, e15_feeest
+from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
+                           e12_onramp, e13_remit, e14_preconf, e15_feeest,
+                           e17_perpdepth)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -132,6 +134,7 @@ def main() -> int:
     fee_rows: list[pd.DataFrame] = []
     quote_rows: list[pd.DataFrame] = []
     route_rows: list[pd.DataFrame] = []
+    depth_rows: list[pd.DataFrame] = []
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -235,6 +238,7 @@ def main() -> int:
                         route_rows.append(_r)
                     onramp_rows.append(e12_onramp.sample())
                     remit_rows.append(e13_remit.sample())
+                    depth_rows.append(e17_perpdepth.sample())
                 except Exception as exc:
                     failures.append(f"e10/e12/e13: {exc}")
                 last_quote = now
@@ -377,6 +381,13 @@ def main() -> int:
               f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
               flush=True)
         write(e13_remit.DATASET, rdf, run_id)
+
+    if depth_rows:
+        ddf = pd.concat(depth_rows, ignore_index=True)
+        okd = ddf[ddf.error.isna()]
+        print(f"  E17: {len(ddf):,} depth snapshots, {len(okd)} readable "
+              f"across {ddf.market.nunique()} markets", flush=True)
+        write(e17_perpdepth.DATASET, ddf, run_id)
 
     if route_rows:
         rdf = pd.concat(route_rows, ignore_index=True)
