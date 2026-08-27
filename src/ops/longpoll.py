@@ -131,6 +131,7 @@ def main() -> int:
     last_fee = last_fee_sample = 0.0
     fee_rows: list[pd.DataFrame] = []
     quote_rows: list[pd.DataFrame] = []
+    route_rows: list[pd.DataFrame] = []
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -228,7 +229,10 @@ def main() -> int:
 
             if now - last_quote >= QUOTE_EVERY_S:
                 try:
-                    quote_rows.append(e10_quotes.sample())
+                    _q, _r = e10_quotes.sample()
+                    quote_rows.append(_q)
+                    if len(_r):
+                        route_rows.append(_r)
                     onramp_rows.append(e12_onramp.sample())
                     remit_rows.append(e13_remit.sample())
                 except Exception as exc:
@@ -373,6 +377,11 @@ def main() -> int:
               f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
               flush=True)
         write(e13_remit.DATASET, rdf, run_id)
+
+    if route_rows:
+        rdf = pd.concat(route_rows, ignore_index=True)
+        print(f"  E16: {len(rdf):,} route legs across {rdf.venue.nunique()} venues", flush=True)
+        write(e10_quotes.ROUTE_DATASET, rdf, run_id)
 
     if quote_rows:
         qdf = pd.concat(quote_rows, ignore_index=True)

@@ -57,6 +57,7 @@ import urllib.request
 import pandas as pd
 
 DATASET = "e10_quote_benchmark"
+ROUTE_DATASET = "e16_dex_routes"
 HDRS = {"User-Agent": "dataforge/1.0", "Content-Type": "application/json"}
 # A burn address: quotes need a taker, and we never sign or send anything.
 TAKER = "0x0000000000000000000000000000000000000001"
@@ -114,7 +115,19 @@ def _kyber(sell, buy, amt):
         return None, e
     try:
         rs = d["data"]["routeSummary"]
-        return int(rs["amountOut"]), None, {"fee_usd": 0.0, "tool": "kyberswap"}
+        # THE ROUTE IS IN A PAYLOAD WE ALREADY PAY FOR, and the first version threw it away.
+        # Which pools a router picked for a trade nobody placed maps where routable liquidity
+        # actually sits: executed swaps are on-chain forever, but a quoted route for a
+        # hypothetical size is computed on demand and stored by nobody. It also surfaces venues
+        # too small to reach volume rankings (one probe routed through ekubo-v3 and fermi).
+        legs = []
+        for hop_i, hop in enumerate(rs.get("route") or []):
+            for leg_i, leg in enumerate(hop or []):
+                legs.append({"hop": hop_i, "leg": leg_i, "venue": leg.get("exchange"),
+                             "pool": leg.get("pool"),
+                             "swap_amount_raw": (str(leg.get("swapAmount"))
+                                                 if leg.get("swapAmount") is not None else None)})
+        return int(rs["amountOut"]), None, {"fee_usd": 0.0, "tool": "kyberswap", "legs": legs}
     except Exception:
         return None, "unparsable"
 
@@ -138,11 +151,11 @@ def _cow(sell, buy, amt):
 PROVIDERS = {"lifi": _lifi, "kyberswap": _kyber, "cow": _cow}
 
 
-def sample() -> pd.DataFrame:
+def sample() -> tuple[pd.DataFrame, pd.DataFrame]:
     """One full round: every provider, every size, every pair, as close to simultaneous as
     sequential HTTP allows. The timestamp is recorded PER QUOTE, not per round, because prices
     move during the round and pretending otherwise would fabricate simultaneity."""
-    rows = []
+    rows, routes = [], []
     for sell_sym, buy_sym, sizes in PAIRS:
         sell, sdec = TOKENS[sell_sym]
         buy, bdec = TOKENS[buy_sym]
@@ -171,6 +184,16 @@ def sample() -> pd.DataFrame:
                                      if meta.get("fee_sell_raw") is not None else None),
                     "route_tool": meta.get("tool"),
                 })
+                for leg in meta.get("legs", []):
+                    routes.append({"quoted_ts": t0, "pair": f"{sell_sym}/{buy_sym}",
+                                   "sell_size": size, "provider": pname, **leg})
+                # Providers that name only the venue used, with no leg breakdown, still get one
+                # row so the panel stays comparable across providers.
+                if not meta.get("legs") and meta.get("tool") and pname != "kyberswap":
+                    routes.append({"quoted_ts": t0, "pair": f"{sell_sym}/{buy_sym}",
+                                   "sell_size": size, "provider": pname, "hop": 0, "leg": 0,
+                                   "venue": meta["tool"], "pool": None,
+                                   "swap_amount_raw": None})
                 time.sleep(0.25)          # be a polite client of a free service
     df = pd.DataFrame(rows)
 
@@ -191,10 +214,18 @@ def sample() -> pd.DataFrame:
         df.loc[g.index, "best_provider"] = best["provider"]
         df.loc[g.index, "spread_bps"] = round(float(bps), 2)
         df.loc[g.index, "n_answered"] = len(ok)
-    return df
+
+    rdf = pd.DataFrame(routes)
+    if len(rdf):
+        # How many distinct venues a router split across, per quote. One venue means the pair is
+        # concentrated at that size; several means liquidity is fragmented.
+        rdf["n_venues"] = rdf.groupby(["quoted_ts", "pair", "sell_size", "provider"])["venue"]                              .transform("nunique")
+    return df, rdf
 
 
 if __name__ == "__main__":
-    d = sample()
+    d, r = sample()
+    if len(r):
+        print(f"routes: {len(r)} legs across {r.venue.nunique()} venues")
     print(d[["pair", "sell_size", "provider", "price", "spread_bps",
              "best_provider", "latency_s", "error"]].to_string(index=False))
