@@ -121,6 +121,9 @@ Most of these came out of getting something wrong first.
 - `fee_rate_sat_vb` is present on roughly a fifth of observed arrivals, sampled from the recent
   feed. It is never estimated for the rest, because a guessed fee rate would ruin the analyses
   the column exists for.
+- A fee rate of exactly 0 is real and rare, about 1 in 6,000 of the sampled arrivals, and most of
+  those we have seen went on to confirm. Filter on `fee_rate_sat_vb > 0` if a zero would break
+  your arithmetic, rather than treating it as a decode fault.
 - Mempools are node-local, and how long a node keeps things is its own choice rather than a
   protocol rule. Ours served 115-day-old entries where Bitcoin Core would have evicted after 336
   hours. `e9` tracks how far apart two providers are, usually several thousand transactions.
