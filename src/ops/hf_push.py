@@ -159,7 +159,7 @@ Most of these came out of getting something wrong first.
   so coverage is bounded by how often we call it. It is never estimated for the rest, because a
   guessed fee rate would ruin the analyses the column exists for.
   Measured coverage, as a share of arrivals we actually observed (`pre_existing == False`):
-  **2026-08-25 none, 2026-08-26 ~4%, 2026-08-27 ~14%, 2026-08-28 ~16% early, ~40-58% late.**
+  **2026-08-25 none, 2026-08-26 ~4%, 2026-08-27 ~14%, 2026-08-28 ~16% early, ~75% late.**
   Coverage of PRE-EXISTING transactions -- which is what dropped rows inherit -- moved from
   **~1% to ~93%** on 2026-08-28. Partitions from 2026-08-29 onward are far denser than anything
   earlier, and the gap is now large enough that pooling them unexamined would be a mistake.

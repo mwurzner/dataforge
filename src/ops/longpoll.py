@@ -68,7 +68,12 @@ PRE_FEE_EVERY_S = float(os.environ.get("DF_PRE_FEE_EVERY_S", 2.0))
 # Full-mempool RPC snapshot. One call supplies ~34% of the tracked set's fees against ~9% from a
 # whole run of per-transaction sampling, so this is the dominant source. 15 minutes keeps the wire
 # cost near 83 MB per run (4.6 MB gzipped per call) against a free public node.
-RPC_MEMPOOL_EVERY_S = float(os.environ.get("DF_RPC_MEMPOOL_EVERY_S", 900))
+# TWO cadences, because the nodes hold different halves of the problem (see NODE_FAST /
+# NODE_DEEP). The cheap young-mempool node is polled often to catch ARRIVALS, whose median dwell
+# is 10.2 minutes; the expensive deep-backlog node is polled rarely, because an 11-day-old
+# transaction is not going anywhere. Wire cost per 4.5h run: ~135 MB fast + ~88 MB deep.
+RPC_FAST_EVERY_S = float(os.environ.get("DF_RPC_FAST_EVERY_S", 120))
+RPC_MEMPOOL_EVERY_S = float(os.environ.get("DF_RPC_MEMPOOL_EVERY_S", 1800))
 # E1 STORAGE MODE. "aggregate" (default) stores a per-minute summary plus full rows for the
 # never-mined transactions, instead of a row per transaction. E1 is 85% of everything this
 # project stores AND is the one dataset established as NOT scarce -- Flashbots publishes the same
@@ -121,7 +126,8 @@ def _fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
         stop.wait(2.0)
 
 
-def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list) -> None:
+def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list,
+                          nodes=None, every: float = 0.0, label: str = "deep") -> None:
     """Take a full-mempool fee snapshot from a public Bitcoin node, periodically.
 
     Own thread because the call is ~2s and multi-megabyte, and the main loop must not wait on it.
@@ -130,11 +136,11 @@ def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list) -> None:
     """
     while not stop.is_set():
         try:
-            btc.snapshot_node_fees()
+            btc.snapshot_node_fees(nodes)
         except Exception as exc:
             if len(failures) < 200:
-                failures.append(f"e8 node snapshot: {exc}")
-        stop.wait(RPC_MEMPOOL_EVERY_S)
+                failures.append(f"e8 node snapshot ({label}): {exc}")
+        stop.wait(every or RPC_MEMPOOL_EVERY_S)
 
 
 def _pre_fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
@@ -247,6 +253,7 @@ def main() -> int:
     fee_thread = None
     pre_fee_thread = None
     node_fee_thread = None
+    node_fast_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -259,10 +266,16 @@ def main() -> int:
     pre_fee_thread = threading.Thread(target=_pre_fee_sampler, args=(btc, fee_stop, failures),
                                       name="pre-fee-sampler", daemon=True)
     pre_fee_thread.start()
-    node_fee_thread = threading.Thread(target=_node_fee_snapshotter,
-                                       args=(btc, fee_stop, failures),
-                                       name="node-fee-snapshot", daemon=True)
+    node_fee_thread = threading.Thread(
+        target=_node_fee_snapshotter,
+        args=(btc, fee_stop, failures, e8_btc_mempool.NODE_DEEP, RPC_MEMPOOL_EVERY_S, "deep"),
+        name="node-fee-deep", daemon=True)
     node_fee_thread.start()
+    node_fast_thread = threading.Thread(
+        target=_node_fee_snapshotter,
+        args=(btc, fee_stop, failures, e8_btc_mempool.NODE_FAST, RPC_FAST_EVERY_S, "fast"),
+        name="node-fee-fast", daemon=True)
+    node_fast_thread.start()
 
     try:
         while time.time() - t0 < DURATION_S:
@@ -376,6 +389,8 @@ def main() -> int:
         pre_fee_thread.join(timeout=10)
     if node_fee_thread is not None:
         node_fee_thread.join(timeout=15)
+    if node_fast_thread is not None:
+        node_fast_thread.join(timeout=15)
 
     if quote_future is not None:
         try:
