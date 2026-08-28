@@ -101,6 +101,7 @@ WINDOWED = {
     "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
     "e16_dex_routes", "e17_perp_depth",
+    "e18_attestation_pool",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -119,7 +120,77 @@ ODC-BY: use it freely, credit "DataForge (dataforge-labs)". Questions and reques
 history via the discussions tab.
 """
 
+ATTESTATION_CARD = '''# Ethereum attestation pool
+
+Attestations this node saw, against the attestations that reached a block. On chain you can see
+that a validator's attestation is missing. You cannot see whether it was never produced, produced
+but never propagated, or propagated and then never packed by a proposer. That distinction lives
+only in the pool, and the pool is not kept by anyone.
+
+The consensus API is explicit about what it serves: attestations "known by the node but not
+necessarily incorporated into any block". Every provider documents that endpoint as real-time,
+and none archives it. Measured churn on a single 15-second gap: 118 attestations left the pool
+and 272 appeared.
+
+## What this is NOT
+
+Attester effectiveness is already well served and you should use the existing tools for it.
+[Rated](https://rated.network) and [beaconcha.in](https://beaconcha.in) both publish participation
+rate, correctness and inclusion delay, all derived from on-chain data and all reconstructable from
+an archive node. None of that is here, because none of it is scarce.
+
+What is here is the counterfactual half: the attester slots that entered this node's pool and
+never reached a block.
+
+## What is in here
+
+| name | one row is |
+|---|---|
+| `e18_attestation_pool` | one slot: attester slots seen in the pool, attester slots included on chain, and the difference |
+
+## Reading it
+
+`attesters_seen_in_pool` is the population count of the union of aggregation bitfields observed
+for that slot, summed over committee groups. `attesters_included` is the same count taken from
+the blocks that carried attestations for that slot. `attesters_net_never_included` is the first
+minus the second.
+
+**That figure is signed on purpose, and negative values are real.** A proposer can include
+attestations this node never held, so a negative number means the network carried more than we
+saw. Clamping it at zero would hide exactly the propagation asymmetry the column exists to show.
+In a well-observed slot the two counts agree to within about 0.5% (roughly 28,160 against
+28,163); the interesting rows are the ones that do not.
+
+## Before you build on this
+
+- **One node's view.** This is what a single consensus client held, not what the network held. An
+  attestation absent here may have been present elsewhere. Treat it as a lower bound on what
+  existed, never as a claim about the network. This is the same limitation as our mempool
+  datasets, stated the same way.
+- **It counts attester slots, not validators.** An SSZ bitfield's population count tells you how
+  many attester slots it represents, not which validators they were. Resolving identity needs
+  committee assignments (~8 MB per epoch, ~1.8 GB/day) fetched purely to map bit positions, which
+  is not collected. So this answers "how many were left out", not "was it me".
+- **The pool holds roughly the last 50 slots**, about ten minutes. An attestation that arrived and
+  was included between two polls is invisible to us. `n_polls_seen` is on every row so a
+  well-observed slot can be told from a glimpsed one; low values mean low confidence.
+- **A failed block fetch overstates the gap**, because uncounted inclusions look like exclusions.
+  `block_fetch_failures` and `missed_slots_seen` are carried on every row rather than smoothed
+  away. A missed slot genuinely has no block and is counted separately from a fetch that failed.
+- Slots near the end of a collection window are finalised early, so their inclusion counts are
+  incomplete by construction. Prefer slots with a high `n_polls_seen`.
+'''
+
 PRODUCTS = {
+    "ethereum-attestation-pool": {
+        "datasets": ["e18_attestation_pool", MANIFEST],
+        "example": "e18_attestation_pool",
+        "pretty": "Ethereum attestations seen in the pool but never included on chain",
+        "tags": ["ethereum", "beacon-chain", "consensus", "attestations", "staking",
+                 "validator", "blockchain", "time-series"],
+        "size": "10K<n<100K",
+        "body": ATTESTATION_CARD,
+    },
     "bitcoin-mempool-lifecycle": {
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
                      "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
