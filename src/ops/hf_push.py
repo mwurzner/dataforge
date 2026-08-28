@@ -62,6 +62,26 @@ ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, ne
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 SAMPLE_START = os.environ.get("DF_SAMPLE_START", "2026-08-25")
 SAMPLE_END = os.environ.get("DF_SAMPLE_END", "")
+# Warn once the pinned week is this old. 34 days => the 2026-08-25 pin starts
+# nagging on 2026-09-28, a few days before the planned 2026-10-01 re-pin.
+SAMPLE_REPIN_DAYS = int(os.environ.get("DF_SAMPLE_REPIN_DAYS", 34))
+
+
+def window_age_warning() -> str | None:
+    """Shout when the published sample has gone stale.
+
+    The window is FIXED on purpose, which means nothing breaks when it goes out of date -- it
+    just quietly keeps showing an old week. A frozen window that everyone has forgotten is the
+    failure mode this design invites, so the run says so rather than relying on a diary entry.
+    """
+    from datetime import date as _d
+    y, m, d = (int(x) for x in SAMPLE_START.split("-"))
+    age = (_d.today() - _d(y, m, d)).days
+    if age >= SAMPLE_REPIN_DAYS:
+        return (f"SAMPLE WINDOW IS {age} DAYS OLD (pinned {SAMPLE_START}). Re-pin it to a "
+                f"representative recent week: set DF_SAMPLE_START. The public repos MIRROR the "
+                f"window, so the old week is removed automatically.")
+    return None
 
 
 def sample_window() -> tuple[str, str]:
@@ -443,6 +463,10 @@ def _receipt(ok: bool, summary: dict) -> None:
 
 def main() -> int:
     everything = sorted({d for p in PRODUCTS.values() for d in p["datasets"]} | ARCHIVE_ONLY)
+    _w = window_age_warning()
+    if _w:
+        print("  !! " + _w, flush=True)
+
     ok = _push(ARCHIVE_REPO, everything, None, None, "archive", private=True)
     _receipt(ok, _last_archive_summary)
 
