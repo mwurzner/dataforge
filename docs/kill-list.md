@@ -8,7 +8,7 @@ Every candidate dataset checked against the scarcity criterion, and why it faile
 
 Kept because it is the most reusable thing this project has produced. The recurring shape:
 **if a dataset is valuable and accessible, a vendor has already built it.** What survives sits
-where the buyer base is real but unformed. Hit rate to date: **5 built of 20 checked.**
+where the buyer base is real but unformed. Hit rate to date: **5 built of 22 checked.**
 
 The discipline, in order, and it is not negotiable — three of the four surviving datasets were
 found this way, and the one that was not had to be withdrawn:
@@ -42,6 +42,8 @@ found this way, and the one that was not had to be withdrawn:
 | 18 | **Kalshi order book depth** | see below |
 | 19 | **stablecoin issuer mint/redeem latency** | see below |
 | 20 | **stock borrow fees / short availability** | see below |
+| 21 | **Bitcoin block templates** (what a node WOULD mine) | see below |
+| 22 | node peer topology (`getpeerinfo`) | gateway returns **501 Not Implemented**; no keyless source |
 
 ## 17 — npm / PyPI yanked releases (killed 2026-08-27)
 
@@ -117,6 +119,24 @@ places. **Ephemerality of one delivery channel is not scarcity of the data.** Wo
 distinct failure mode from the others on this list.
 
 Cost to kill: one search.
+
+## 21 — Bitcoin block templates (killed 2026-08-28)
+
+A node's `getblocktemplate` returns the exact block it WOULD mine right now -- 6,337
+transactions with fees when probed. That is a genuine counterfactual: comparing it against the
+block miners actually produced exposes selection deviation, out-of-band payment and acceleration.
+Nobody stores a template, so it looked strong.
+
+**mempool.space already computes and archives the comparison.**
+`/api/v1/block/{hash}/audit-summary` returns `expectedFees`, `expectedWeight`, `addedTxs`,
+`missingTxs`, `freshTxs`, `matchRate`, plus `acceleratedTxs`, `prioritizedTxs`, `fullrbfTxs` and
+`sigopTxs`. And it is RETAINED: probed at heights 964000, 950000, 900000 and **800000** (mid-2023),
+all returning a full audit.
+
+The template itself is ephemeral; the ANSWER it would give is archived. Same shape as candidate 20
+-- the ephemerality of an input does not matter when the output is already published.
+
+Cost to kill: four minutes.
 
 ## Survived
 
