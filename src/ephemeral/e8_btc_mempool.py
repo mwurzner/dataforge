@@ -116,6 +116,11 @@ NODE_RPC = os.environ.get("DF_BTC_NODE_RPC", NODE_RPCS[0][1])
 # Measured dwell explains why this matters: median 10.2 min, and 61.7% of arrivals live under 15
 # minutes, so a 15-minute-only cadence has an arrivals ceiling near 38%. Polling the cheap node
 # every 2 minutes lifts that ceiling to ~93%.
+# Litecoin, same trick. Its mempool is tiny (162 transactions when probed), so ONE call covers
+# essentially all of it and costs almost nothing. Probed 2026-08-28: tatum answers, publicnode
+# 404s, nownodes 422s, drpc 400s -- so there is a single source and no fallback to offer.
+LTC_NODES = [("tatum", "https://litecoin-mainnet.gateway.tatum.io")]
+
 NODE_FAST = [("drpc", "https://bitcoin.drpc.org"),
              ("publicnode", "https://bitcoin-rpc.publicnode.com")]
 NODE_DEEP = [("tatum", "https://bitcoin-mainnet.gateway.tatum.io"),

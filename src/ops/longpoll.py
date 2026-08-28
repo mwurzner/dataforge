@@ -101,7 +101,7 @@ def write(dataset: str, df: pd.DataFrame, run_id: str, quiet: bool = False) -> P
     return p
 
 
-def _fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
+def _fee_sampler(btc, stop: "threading.Event", failures: list, ltc=None) -> None:
     """Sample /mempool/recent on its OWN clock, because the main loop cannot deliver one.
 
     THE BUG THIS FIXES. The sampler used to sit inline behind `if now - last_fee_sample >= 2`,
@@ -123,6 +123,15 @@ def _fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
         except Exception as exc:
             if len(failures) < 200:
                 failures.append(f"e8 recent: {exc}")
+        # Litecoin was collected for three days with fee_sat/vsize/fee_rate at exactly 0% --
+        # litecoinspace serves /mempool/recent with fees and we simply never called it. Found by
+        # auditing column completeness across every dataset rather than by any failure.
+        if ltc is not None:
+            try:
+                ltc.poll_recent()
+            except Exception as exc:
+                if len(failures) < 200:
+                    failures.append(f"e11 recent: {exc}")
         stop.wait(2.0)
 
 
@@ -254,13 +263,14 @@ def main() -> int:
     pre_fee_thread = None
     node_fee_thread = None
     node_fast_thread = None
+    ltc_node_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
 
     # The fee sampler runs on its own clock from here; see _fee_sampler for why it cannot
     # live in the main loop. Daemon so a crash in the loop can never leave it running.
-    fee_thread = threading.Thread(target=_fee_sampler, args=(btc, fee_stop, failures),
+    fee_thread = threading.Thread(target=_fee_sampler, args=(btc, fee_stop, failures, ltc),
                                   name="fee-sampler", daemon=True)
     fee_thread.start()
     pre_fee_thread = threading.Thread(target=_pre_fee_sampler, args=(btc, fee_stop, failures),
@@ -271,6 +281,11 @@ def main() -> int:
         args=(btc, fee_stop, failures, e8_btc_mempool.NODE_DEEP, RPC_MEMPOOL_EVERY_S, "deep"),
         name="node-fee-deep", daemon=True)
     node_fee_thread.start()
+    ltc_node_thread = threading.Thread(
+        target=_node_fee_snapshotter,
+        args=(ltc, fee_stop, failures, e8_btc_mempool.LTC_NODES, RPC_MEMPOOL_EVERY_S, "ltc"),
+        name="node-fee-ltc", daemon=True)
+    ltc_node_thread.start()
     node_fast_thread = threading.Thread(
         target=_node_fee_snapshotter,
         args=(btc, fee_stop, failures, e8_btc_mempool.NODE_FAST, RPC_FAST_EVERY_S, "fast"),
@@ -391,6 +406,8 @@ def main() -> int:
         node_fee_thread.join(timeout=15)
     if node_fast_thread is not None:
         node_fast_thread.join(timeout=15)
+    if ltc_node_thread is not None:
+        ltc_node_thread.join(timeout=15)
 
     if quote_future is not None:
         try:
