@@ -32,6 +32,7 @@ import os
 import sys
 import time
 import traceback
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +87,31 @@ def write(dataset: str, df: pd.DataFrame, run_id: str, quiet: bool = False) -> P
     if not quiet:
         print(f"  wrote {dataset}: {len(out):,} rows -> {p.relative_to(DATA)}", flush=True)
     return p
+
+
+def _fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
+    """Sample /mempool/recent on its OWN clock, because the main loop cannot deliver one.
+
+    THE BUG THIS FIXES. The sampler used to sit inline behind `if now - last_fee_sample >= 2`,
+    but the loop ends in `time.sleep(POLL_S)` and production sets DF_POLL_S=5. A 2s condition
+    checked once every 5s samples every 5s. The intended 2s cadence never ran.
+
+    It matters because coverage is bounded by call frequency: /mempool/recent returns only the
+    ten newest transactions, so one call per 5s captures at most 2.0 tx/s against a measured
+    arrival rate of ~4.3 tx/s -- a ceiling near 47%, and the realised figure was 16%. At a true
+    2s cadence the ceiling is ~5.0 tx/s, i.e. above the arrival rate.
+
+    Thread-safe by inspection, not by assumption: poll_recent writes ONLY to `self.fees` (which
+    nothing else writes) and two diagnostic counters. It never touches `seen`, `mined` or `pool`,
+    which are the structures the main loop mutates.
+    """
+    while not stop.is_set():
+        try:
+            btc.poll_recent()
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e8 recent: {exc}")
+        stop.wait(2.0)
 
 
 def _quote_round():
@@ -171,9 +197,17 @@ def main() -> int:
     depth_rows: list[pd.DataFrame] = []
     quote_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='quotes')
     quote_future = None
+    fee_stop = threading.Event()
+    fee_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
+
+    # The fee sampler runs on its own clock from here; see _fee_sampler for why it cannot
+    # live in the main loop. Daemon so a crash in the loop can never leave it running.
+    fee_thread = threading.Thread(target=_fee_sampler, args=(btc, fee_stop, failures),
+                                  name="fee-sampler", daemon=True)
+    fee_thread.start()
 
     try:
         while time.time() - t0 < DURATION_S:
@@ -191,15 +225,6 @@ def main() -> int:
                 last_div = now
 
             # ---- Bitcoin, on its own much slower clock ----
-            # 2s, not 5s. /mempool/recent returns the 10 newest arrivals for ~1 KB, so a faster
-            # cadence lifts fee coverage of observed arrivals from ~19% toward ~45%, which feeds
-            # straight into the fee-accuracy study, the only real RESULT this project has.
-            if now - last_fee_sample >= 2:
-                try:
-                    btc.poll_recent()
-                except Exception as exc:
-                    failures.append(f"e8 recent: {exc}")
-                last_fee_sample = now
             if now - last_btc >= BTC_POLL_S:
                 try:
                     btc.poll_pool()
@@ -289,6 +314,10 @@ def main() -> int:
 
     # A round still in flight holds real observations. Give it a bounded chance to land rather
     # than discarding it, but never let it delay reconciliation indefinitely.
+    fee_stop.set()
+    if fee_thread is not None:
+        fee_thread.join(timeout=10)
+
     if quote_future is not None:
         try:
             quote_future.result(timeout=180)
