@@ -498,7 +498,7 @@ def main() -> int:
         # transaction observed so far was already pending when its run began.
         print(f"      fee coverage: arrivals {_cov:.1%} | pre-existing {_pcov:.1%} "
               f"| dropped {_dcov:.1%} "
-              f"| sampler ok {btc.n_pre_fee_ok:,} miss {btc.n_pre_fee_miss:,} | node snapshots {btc.n_node_snapshots} gave {btc.n_node_fees:,}",
+              f"| sampler ok {btc.n_pre_fee_ok:,} miss {btc.n_pre_fee_miss:,} | node snapshots {btc.n_node_snapshots} gave {btc.n_node_fees:,} via {dict(btc.node_source_counts) or 'NONE'}",
               flush=True)
     write(e8_btc_mempool.DATASET, bdf, run_id)
     if btc_div_rows:

@@ -185,7 +185,11 @@ class BtcMempoolTracker:
         # Per-transaction mempool STRUCTURE, available only from a full node and discarded by
         # every other source we poll. Keyed by txid; see snapshot_node_fees.
         self.node_meta: dict[str, dict] = {}
-        self.node_source = None     # which RPC actually answered
+        # WHICH node answered, counted per source. Coverage depends entirely on this: the
+        # deep node covers 93% of the tracked set and the fallback 34%, so a silent failover
+        # would halve the dataset's most important column with no visible signal.
+        self.node_source = None
+        self.node_source_counts: dict[str, int] = {}
         self.node_pool_size: list[tuple[float, int, int]] = []   # (ts, node_count, our_count)
         self._pre_worklist: list[str] | None = None
         # FEE RATE PER TRANSACTION. Without it this dataset can describe WHEN things happened
@@ -412,6 +416,7 @@ class BtcMempoolTracker:
             if isinstance(got, dict) and got:
                 entries = got
                 self.node_source = name
+                self.node_source_counts[name] = self.node_source_counts.get(name, 0) + 1
                 break
         if not isinstance(entries, dict):
             self.n_failed += 1
