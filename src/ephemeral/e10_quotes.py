@@ -88,9 +88,19 @@ PAIRS = [
 # inside a 900s cycle, so there is no reason whatever to send them as a burst -- spreading LI.FI's
 # 17 calls over ~40s costs nothing and is what a polite client of a free service does. A 429 is
 # the service telling us we are hitting too hard, and the correct response is to hit less hard.
-_MIN_GAP = {"lifi": 2.5, "kyberswap": 0.6, "cow": 0.6}
+# 6.0s for LI.FI, not 2.5. MEASURED IN PRODUCTION, not locally: at 2.5s the runner saw a
+# 33.4% failure rate (366 HTTP 429s) while the identical code failed 0 of 17 on a development
+# machine. The difference is the environment -- GitHub runners share outbound IPs with very many
+# other jobs, so a per-IP budget at LI.FI is partly consumed by traffic that is not ours. Local
+# success therefore proves nothing about the runner, and the gap is set for the harsher case.
+_MIN_GAP = {"lifi": 6.0, "kyberswap": 0.6, "cow": 0.6}
 _last_call: dict[str, float] = {}
-_RETRY_CODES = {429, 502, 503, 504}
+# Which provider is mid-call, so a 429 handler can penalise the right one.
+_current_provider: list[str] = ["?"]
+# 429 IS DELIBERATELY ABSENT. Retrying a rate limit doubles the request count into a service
+# that has just asked us to slow down -- it turned 366 refusals into ~730 requests and made the
+# problem worse, not better. Server-side faults are worth one retry; "too many requests" is not.
+_RETRY_CODES = {502, 503, 504}
 
 
 def _pace(provider: str) -> None:
@@ -102,6 +112,7 @@ def _pace(provider: str) -> None:
         if wait > 0:
             time.sleep(wait)
     _last_call[provider] = time.time()
+    _current_provider[0] = provider
 
 
 def _req(url: str, body: dict | None = None, timeout: int = 25, retries: int = 1):
@@ -117,6 +128,10 @@ def _req(url: str, body: dict | None = None, timeout: int = 25, retries: int = 1
                 data=(json.dumps(body).encode() if body else None)), timeout=timeout)
             return json.loads(r.read()), None
         except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                # Respect it: push this provider's next call out, and do not retry.
+                _last_call[_current_provider[0]] = time.time() + 30.0
+                return None, f"HTTPError: HTTP Error 429: {exc.reason}"[:90]
             if exc.code in _RETRY_CODES and attempt < retries:
                 time.sleep(3.0 * (attempt + 1))
                 continue
