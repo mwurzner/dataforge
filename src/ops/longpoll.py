@@ -42,7 +42,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
-                           e17_perpdepth, e18_attpool, e19_stratum)
+                           e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -150,6 +150,21 @@ def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list,
             if len(failures) < 200:
                 failures.append(f"e8 node snapshot ({label}): {exc}")
         stop.wait(every or RPC_MEMPOOL_EVERY_S)
+
+
+def _stratum_direct_reader(sd, stop: "threading.Event", failures: list) -> None:
+    """Hold read-only stratum connections to the pools for the run.
+
+    Own thread: the collector blocks in select(), and reconnects internally with backoff. Touches
+    only its own object.
+    """
+    while not stop.is_set():
+        try:
+            sd.run(duration_s=60)
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e20: {exc}")
+            stop.wait(5.0)
 
 
 def _stratum_reader(strat, stop: "threading.Event", failures: list) -> None:
@@ -275,6 +290,7 @@ def main() -> int:
     # divergence sampling; the frame records that honestly rather than faking a weaker claim.
     attp = e18_attpool.AttestationPoolTracker()
     strat = e19_stratum.StratumJobCollector()
+    sdirect = e20_stratum_direct.DirectStratumCollector()
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
     preconf = e14_preconf.make_watchers()
@@ -301,6 +317,7 @@ def main() -> int:
     ltc_node_thread = None
     attp_thread = None
     strat_thread = None
+    sdirect_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -324,6 +341,10 @@ def main() -> int:
     strat_thread = threading.Thread(target=_stratum_reader, args=(strat, fee_stop, failures),
                                     name="stratum-jobs", daemon=True)
     strat_thread.start()
+    sdirect_thread = threading.Thread(target=_stratum_direct_reader,
+                                      args=(sdirect, fee_stop, failures),
+                                      name="stratum-direct", daemon=True)
+    sdirect_thread.start()
     ltc_node_thread = threading.Thread(
         target=_node_fee_snapshotter,
         args=(ltc, fee_stop, failures, e8_btc_mempool.LTC_NODES, RPC_MEMPOOL_EVERY_S, "ltc"),
@@ -455,6 +476,8 @@ def main() -> int:
         attp_thread.join(timeout=15)
     if strat_thread is not None:
         strat_thread.join(timeout=15)
+    if sdirect_thread is not None:
+        sdirect_thread.join(timeout=15)
 
     if quote_future is not None:
         try:
@@ -605,6 +628,30 @@ def main() -> int:
               f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
               flush=True)
         write(e13_remit.DATASET, rdf, run_id)
+
+    ddf = sdirect.frame()
+    if len(ddf):
+        # PROPAGATION is the spread of OUR observed_ts across pools for a NEW block, i.e.
+        # rows where the pool said clean_jobs. An earlier version reported the nTime spread
+        # over the whole window, which is not propagation at all -- nTime advances as pools
+        # refresh their templates, so it grows with window length regardless of ordering.
+        # Each pool's FIRST sighting of each block, then the spread across pools. Pools
+        # re-issue clean_jobs for the same block repeatedly, so a plain min/max over the
+        # window measures the window length, not propagation -- it read 121s on a 170s run.
+        fresh = ddf[ddf.clean_jobs == True]  # noqa: E712 -- may be object dtype
+        spread = None
+        if len(fresh):
+            first = fresh.groupby(["prev_hash", "operator"]).observed_ts.min().reset_index()
+            g = first.groupby("prev_hash").observed_ts.agg(["min", "max", "count"])
+            g = g[g["count"] > 1]
+            if len(g):
+                spread = float((g["max"] - g["min"]).median())
+        print(f"  E20: {len(ddf):,} jobs from {ddf['pool'].nunique()} pools "
+              f"({ddf.operator.nunique()} operators) | {ddf.prev_hash.nunique()} blocks "
+              f"| new-block propagation spread "
+              f"{f'{spread:.1f}s' if spread is not None else 'n/a (no shared new block yet)'} "
+              f"| reconnects {sum(sdirect.n_reconnects.values())}", flush=True)
+        write(e20_stratum_direct.DATASET, ddf, run_id)
 
     sdf = strat.frame()
     if len(sdf):

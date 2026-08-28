@@ -101,7 +101,7 @@ WINDOWED = {
     "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
     "e16_dex_routes", "e17_perp_depth",
-    "e18_attestation_pool",
+    "e18_attestation_pool", "e20_stratum_jobs_direct",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -127,6 +127,65 @@ afterwards, and nothing here is interpolated.
 ODC-BY: use it freely, credit "DataForge (dataforge-labs)". Questions and requests for the full
 history via the discussions tab.
 """
+
+MINING_CARD = '''# Bitcoin mining pool templates
+
+What each mining pool is working on, second by second. Pools push `mining.notify` jobs to their
+miners: the block they are building on, the coinbase they will claim, the merkle branches, and a
+clean-jobs flag meaning "drop everything, there is a new block". Jobs are replaced every few
+seconds. When a block is found, every losing pool's template is gone, and no chain records it.
+
+## The measurement
+
+Pools working on the **same** previous block do not agree. One observation across six pools:
+
+| pool | nTime | coinbase length |
+|---|---|---|
+| slushpool | 6a918a58 | 318 |
+| braiins | 6a918a62 | 318 |
+| f2pool | 6a918a67 | 980 |
+| viabtc | 6a918a70 | 652 |
+| antpool | 6a918a71 | 848 |
+| poolin | 6a918a71 | 516 |
+
+**25 seconds of nTime spread**, and coinbase structures from 318 to 980 characters. That is who
+saw the new block first, and how differently each pool built on it. Note rows 1 and 2: the same
+operator on two endpoints, 10 seconds apart.
+
+## What is in here
+
+| name | one row is |
+|---|---|
+| `e20_stratum_jobs_direct` | one `mining.notify` from one pool: the block it builds on, its nTime, coinbase, merkle branch count and clean-jobs flag |
+
+## How it was collected
+
+Directly from the pools' own stratum endpoints, one read-only connection each, subscribing as an
+observer and never submitting a share. `pool` is the host we connected to rather than an identity
+decoded from data, so provenance is exact. `operator` collapses hostnames belonging to one pool --
+`braiins` and `slushpool` are the same operator and should usually be treated as one.
+
+**No Bitcoin address is used anywhere in this collection.** Two pools serve jobs on subscribe
+alone; four accept a plain worker name. Two further pools (solo.ckpool.org, public-pool.io)
+require a valid payout address and are therefore EXCLUDED rather than handed an invented one.
+
+## Before you build on this
+
+- **nTime is the pool's own clock**, not our receive time, and pools do not all update it on the
+  same cadence. It is a good indicator of when a pool rebuilt its template and a poor stopwatch.
+  For arrival ordering use `observed_ts`, which is ours and consistent across pools.
+- **`observed_ts` carries our network latency to each pool**, which differs by pool and by
+  region. Differences of tens of milliseconds between pools are not meaningful; differences of
+  seconds are.
+- **Six pools, five operators.** This is not the whole network, and pools running regional
+  endpoints may serve different templates elsewhere than the one we connect to.
+- **A dropped connection loses jobs silently.** `pool_reconnects` and `pool_connect_failures` are
+  carried on every row so a gap can be told from a quiet pool.
+- Merkle branches are stored as a count plus the first entry. The count plus the coinbase
+  identifies a distinct template; the full branch list is large and mostly redundant.
+- `clean_jobs = true` is the interesting flag: it means the pool has switched blocks. Sorting
+  those by `observed_ts` gives the propagation order across pools for each new block.
+'''
 
 ATTESTATION_CARD = '''# Ethereum attestation pool
 
@@ -190,6 +249,15 @@ In a well-observed slot the two counts agree to within about 0.5% (roughly 28,16
 '''
 
 PRODUCTS = {
+    "bitcoin-mining-pool-templates": {
+        "datasets": ["e20_stratum_jobs_direct", MANIFEST],
+        "example": "e20_stratum_jobs_direct",
+        "pretty": "What each Bitcoin mining pool is building on, second by second",
+        "tags": ["bitcoin", "mining", "mining-pools", "stratum", "blockchain",
+                 "propagation", "time-series"],
+        "size": "100K<n<1M",
+        "body": MINING_CARD,
+    },
     "ethereum-attestation-pool": {
         "datasets": ["e18_attestation_pool", MANIFEST],
         "example": "e18_attestation_pool",
