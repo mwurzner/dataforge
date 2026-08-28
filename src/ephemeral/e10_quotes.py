@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
 import urllib.request
 
 import pandas as pd
@@ -81,14 +82,48 @@ PAIRS = [
 ]
 
 
-def _req(url: str, body: dict | None = None, timeout: int = 25):
-    """Returns (payload, error). A failed quote must never be recorded as a bad price."""
-    try:
-        r = urllib.request.urlopen(urllib.request.Request(
-            url, headers=HDRS, data=(json.dumps(body).encode() if body else None)), timeout=timeout)
-        return json.loads(r.read()), None
-    except Exception as exc:
-        return None, f"{type(exc).__name__}: {str(exc)[:80]}"
+# PACING, added 2026-08-28 after measurement. Widening PAIRS from 2 to 6 tripled the burst rate
+# and LI.FI began answering 429: over 8 production partitions it failed 19.5% of the time (244 of
+# 294 failures were 429), against CoW at 0.0% and KyberSwap at 3.3%. A round issues ~51 requests
+# inside a 900s cycle, so there is no reason whatever to send them as a burst -- spreading LI.FI's
+# 17 calls over ~40s costs nothing and is what a polite client of a free service does. A 429 is
+# the service telling us we are hitting too hard, and the correct response is to hit less hard.
+_MIN_GAP = {"lifi": 2.5, "kyberswap": 0.6, "cow": 0.6}
+_last_call: dict[str, float] = {}
+_RETRY_CODES = {429, 502, 503, 504}
+
+
+def _pace(provider: str) -> None:
+    """Hold each provider to its own minimum interval, independent of the others."""
+    gap = _MIN_GAP.get(provider, 0.5)
+    last = _last_call.get(provider)
+    if last is not None:
+        wait = gap - (time.time() - last)
+        if wait > 0:
+            time.sleep(wait)
+    _last_call[provider] = time.time()
+
+
+def _req(url: str, body: dict | None = None, timeout: int = 25, retries: int = 1):
+    """Returns (payload, error). A failed quote must never be recorded as a bad price.
+
+    Transient codes get ONE backoff retry. A retry that also fails is reported as the error it
+    is -- the point is to recover a genuinely temporary refusal, never to mask a persistent one.
+    """
+    for attempt in range(retries + 1):
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(
+                url, headers=HDRS,
+                data=(json.dumps(body).encode() if body else None)), timeout=timeout)
+            return json.loads(r.read()), None
+        except urllib.error.HTTPError as exc:
+            if exc.code in _RETRY_CODES and attempt < retries:
+                time.sleep(3.0 * (attempt + 1))
+                continue
+            return None, f"HTTPError: HTTP Error {exc.code}: {exc.reason}"[:90]
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {str(exc)[:80]}"
+    return None, "unreachable"
 
 
 def _lifi(sell, buy, amt):
@@ -162,6 +197,7 @@ def sample() -> tuple[pd.DataFrame, pd.DataFrame]:
         for size in sizes:
             amt = int(size * 10 ** sdec)
             for pname, fn in PROVIDERS.items():
+                _pace(pname)
                 t0 = time.time()
                 res = fn(sell, buy, amt)
                 out, err = res[0], res[1]
