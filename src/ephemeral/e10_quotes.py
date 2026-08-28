@@ -93,25 +93,44 @@ PAIRS = [
 # machine. The difference is the environment -- GitHub runners share outbound IPs with very many
 # other jobs, so a per-IP budget at LI.FI is partly consumed by traffic that is not ours. Local
 # success therefore proves nothing about the runner, and the gap is set for the harsher case.
-_MIN_GAP = {"lifi": 6.0, "kyberswap": 0.6, "cow": 0.6}
-_last_call: dict[str, float] = {}
+# Modest gaps. Overload is handled by the CIRCUIT BREAKER below, not by long sleeps: pacing a
+# rate-limited provider slowly just moves the stall from the service to us. A 6.0s gap plus 30s
+# penalties made one round exceed 300s, and the drain discards anything over 180s -- so the
+# "polite" version silently threw away entire rounds.
+_MIN_GAP = {"lifi": 2.0, "kyberswap": 0.6, "cow": 0.6}
+# When a provider answers 429, stop calling it for this long. Failing fast is both faster for us
+# and gentler on them than continuing to dial at a slower rate.
+_COOLDOWN_S = 600.0
+_cooling: dict[str, float] = {}
+# NEXT-ALLOWED time per provider, not last-call time. The distinction matters: the earlier
+# version stored a last-call timestamp and a 429 penalty wrote a FUTURE value into it, so
+# `gap - (now - last)` went negative and _pace waited the penalty PLUS the full gap, compounding.
+# Across 17 LI.FI calls a round took minutes, and the final drain (180s) would have discarded it
+# entirely -- losing a whole quote round in production. Caught from a thread stack dump, not an
+# error, because a sleep is not a failure.
+_next_allowed: dict[str, float] = {}
 # Which provider is mid-call, so a 429 handler can penalise the right one.
 _current_provider: list[str] = ["?"]
+# Hard ceiling on any single wait, so no penalty arithmetic can ever stall a round.
+_MAX_WAIT_S = 30.0
 # 429 IS DELIBERATELY ABSENT. Retrying a rate limit doubles the request count into a service
 # that has just asked us to slow down -- it turned 366 refusals into ~730 requests and made the
 # problem worse, not better. Server-side faults are worth one retry; "too many requests" is not.
 _RETRY_CODES = {502, 503, 504}
 
 
+def _cooling_until(provider: str) -> float:
+    """Seconds remaining on this provider's rate-limit cooldown, 0 if it is available."""
+    return max(0.0, _cooling.get(provider, 0.0) - time.time())
+
+
 def _pace(provider: str) -> None:
-    """Hold each provider to its own minimum interval, independent of the others."""
+    """Wait until this provider is next allowed, then reserve its following slot."""
     gap = _MIN_GAP.get(provider, 0.5)
-    last = _last_call.get(provider)
-    if last is not None:
-        wait = gap - (time.time() - last)
-        if wait > 0:
-            time.sleep(wait)
-    _last_call[provider] = time.time()
+    wait = _next_allowed.get(provider, 0.0) - time.time()
+    if wait > 0:
+        time.sleep(min(wait, _MAX_WAIT_S))
+    _next_allowed[provider] = time.time() + gap
     _current_provider[0] = provider
 
 
@@ -130,7 +149,8 @@ def _req(url: str, body: dict | None = None, timeout: int = 25, retries: int = 1
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
                 # Respect it: push this provider's next call out, and do not retry.
-                _last_call[_current_provider[0]] = time.time() + 30.0
+                # Trip the breaker: no further calls to this provider this round.
+                _cooling[_current_provider[0]] = time.time() + _COOLDOWN_S
                 return None, f"HTTPError: HTTP Error 429: {exc.reason}"[:90]
             if exc.code in _RETRY_CODES and attempt < retries:
                 time.sleep(3.0 * (attempt + 1))
@@ -212,6 +232,22 @@ def sample() -> tuple[pd.DataFrame, pd.DataFrame]:
         for size in sizes:
             amt = int(size * 10 ** sdec)
             for pname, fn in PROVIDERS.items():
+                cool = _cooling_until(pname)
+                if cool > 0:
+                    # Skip, and RECORD it. A skipped quote must be visible as an error, never
+                    # as an absent row -- otherwise a rate-limited provider looks like a
+                    # provider that simply had nothing to say.
+                    rows.append({
+                        "quoted_ts": time.time(),
+                        "pair": f"{sell_sym}/{buy_sym}",
+                        "sell_symbol": sell_sym, "buy_symbol": buy_sym,
+                        "sell_size": size, "sell_amount_raw": str(amt),
+                        "provider": pname, "buy_amount_raw": None, "price": None,
+                        "latency_s": 0.0,
+                        "error": f"skipped: rate-limit cooldown {cool:.0f}s remaining",
+                        "fee_usd": None, "fee_sell_raw": None, "route_tool": None,
+                    })
+                    continue
                 _pace(pname)
                 t0 = time.time()
                 res = fn(sell, buy, amt)
