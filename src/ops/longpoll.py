@@ -167,7 +167,7 @@ def _attpool_sampler(attp, stop: "threading.Event", failures: list) -> None:
         except Exception as exc:
             if len(failures) < 200:
                 failures.append(f"e18: {exc}")
-        stop.wait(12.0)
+        stop.wait(e18_attpool.POLL_EVERY_S)
 
 
 def _pre_fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
