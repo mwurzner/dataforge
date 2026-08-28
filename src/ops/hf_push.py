@@ -159,11 +159,18 @@ Most of these came out of getting something wrong first.
   so coverage is bounded by how often we call it. It is never estimated for the rest, because a
   guessed fee rate would ruin the analyses the column exists for.
   Measured coverage, as a share of arrivals we actually observed (`pre_existing == False`):
-  **2026-08-25 none, 2026-08-26 ~4%, 2026-08-27 ~14%, 2026-08-28 ~16%.** Three things held it
-  down, all fixed on 2026-08-28: fee capture did not exist on the first day; the quote collectors
-  shared a thread with the sampler and blocked it for ~40 minutes of every 4.5-hour run; and the
-  sampler's intended 2-second cadence never actually ran, because it was checked inside a loop
-  that sleeps 5 seconds. Later partitions are denser than earlier ones.
+  **2026-08-25 none, 2026-08-26 ~4%, 2026-08-27 ~14%, 2026-08-28 ~16% early, ~40-58% late.**
+  Coverage of PRE-EXISTING transactions -- which is what dropped rows inherit -- moved from
+  **~1% to ~93%** on 2026-08-28. Partitions from 2026-08-29 onward are far denser than anything
+  earlier, and the gap is now large enough that pooling them unexamined would be a mistake.
+  Four things held it down, all fixed on 2026-08-28: fee capture did not exist on the first day;
+  the quote collectors shared a thread with the sampler and blocked it for ~40 minutes of every
+  4.5-hour run; the sampler's intended 2-second cadence never actually ran, because it was
+  checked inside a loop that sleeps 5 seconds; and fees were fetched one transaction at a time
+  when a full node returns its ENTIRE mempool, with an exact fee and vsize per entry, in a single
+  request. That last one is what mattered, and the lesson is which node you ask: public Bitcoin
+  RPC nodes hold wildly different mempools, and one with a 4 GB `maxmempool` covers 93% of our
+  tracked set in a single call where a 256 MB node covers 34%.
   **Even repaired, 100% is not attainable, and the reason is worth understanding before you rely
   on this column.** The feed returns only the TEN NEWEST transactions per call, so capture is
   capped at 10 per poll however fast we ask. Measured Bitcoin arrival rates ran between 4.3/s and
