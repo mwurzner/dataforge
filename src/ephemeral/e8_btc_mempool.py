@@ -149,6 +149,10 @@ class BtcMempoolTracker:
         self.n_pre_fee_miss = 0     # ...and those already gone by the time we asked
         self.n_node_snapshots = 0   # full-mempool RPC snapshots taken
         self.n_node_fees = 0        # fees learned from them that we did not already have
+        # Per-transaction mempool STRUCTURE, available only from a full node and discarded by
+        # every other source we poll. Keyed by txid; see snapshot_node_fees.
+        self.node_meta: dict[str, dict] = {}
+        self.node_pool_size: list[tuple[float, int, int]] = []   # (ts, node_count, our_count)
         self._pre_worklist: list[str] | None = None
         # FEE RATE PER TRANSACTION. Without it this dataset can describe WHEN things happened
         # but not WHY, and no fee-market question can be asked of it -- which only became
@@ -380,7 +384,28 @@ class BtcMempoolTracker:
             if sat >= 0:
                 self.fees[txid] = (sat, vsize)
                 got += 1
+            # Structure a full node exposes and the HTTP APIs do not. All of it is mempool
+            # state, so all of it is gone the moment the transaction confirms or is evicted.
+            if txid not in self.node_meta:
+                anc, desc = e.get("ancestorcount"), e.get("descendantcount")
+                self.node_meta[txid] = {
+                    # When THIS node first saw it -- an independent first-seen clock, and the
+                    # only external check available on our own timestamps.
+                    "node_first_seen_ts": e.get("time"),
+                    # Signals it may be replaced. Live mempool state: once the transaction
+                    # confirms or is replaced, nothing serves this flag any more.
+                    "rbf_signalled": e.get("bip125-replaceable"),
+                    # >1 means the transaction is part of an unconfirmed chain, which is how
+                    # CPFP fee-bumping shows up.
+                    "ancestor_count": anc if isinstance(anc, int) else None,
+                    "descendant_count": desc if isinstance(desc, int) else None,
+                    "ancestor_vsize": e.get("ancestorsize"),
+                }
         self.n_node_fees += got
+        # The node's mempool size against ours, at the same instant. These disagree enormously
+        # (measured 31k against 88k) and no archive holds either side of the comparison.
+        self.node_pool_size.append((time.time(), len(entries),
+                                    len(self.pool) or len(self.pre_existing)))
         return got
 
     def sample_pre_existing_fee(self) -> bool:
@@ -452,6 +477,7 @@ class BtcMempoolTracker:
             else:
                 fate = "still_pending"
             fee, vsize = self.fees.get(t, (None, None))
+            nm = self.node_meta.get(t) or {}
             rows.append({
                 "txid": t,
                 "first_seen_ts": first,
@@ -465,6 +491,11 @@ class BtcMempoolTracker:
                 "blocks_waited": ((height - self.tip_at_seen[t])
                                   if (height is not None and t in self.tip_at_seen) else None),
                 "pre_existing": t in self.pre_existing,
+                # From a full node's mempool; null for transactions that node never held.
+                "node_first_seen_ts": nm.get("node_first_seen_ts"),
+                "rbf_signalled": nm.get("rbf_signalled"),
+                "ancestor_count": nm.get("ancestor_count"),
+                "descendant_count": nm.get("descendant_count"),
                 "mined_height": height,
                 "block_observed_ts": obs,
                 "left_pool_ts": leftat,
@@ -483,6 +514,33 @@ def divergence() -> pd.DataFrame:
     ts = time.time()
     views: dict[str, set[str]] = {}
     rows = []
+
+    # A FULL NODE is a third view, and a strikingly different one: measured 31k against
+    # mempool.space's 88k at the same instant. The HTTP providers are both large-mempool
+    # explorer nodes, so comparing only those understates how much node policy and peering
+    # actually diverge. `getrawmempool false` returns txids alone -- 1.0 MB gzipped in 0.4s,
+    # against 4.6 MB for the fee-bearing form -- which is cheap enough for this cadence.
+    t0 = time.time()
+    node_ids, node_err = None, None
+    try:
+        body = json.dumps({"jsonrpc": "1.0", "id": "dataforge",
+                           "method": "getrawmempool", "params": [False]}).encode()
+        req = urllib.request.Request(NODE_RPC, data=body, headers={
+            **HDRS, "Content-Type": "application/json", "Accept-Encoding": "gzip"})
+        r = urllib.request.urlopen(req, timeout=60)
+        raw = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+        node_ids = json.loads(raw).get("result")
+    except Exception as exc:
+        node_err = f"{type(exc).__name__}: {str(exc)[:70]}"
+    ok = isinstance(node_ids, list)
+    views["bitcoin-core-node"] = set(node_ids) if ok else set()
+    rows.append({"sampled_ts": ts, "provider": "bitcoin-core-node",
+                 "n_pending": len(views["bitcoin-core-node"]),
+                 "latency_s": round(time.time() - t0, 3),
+                 "error": None if ok else (node_err or "bad payload")})
+
     for name, base in PROVIDERS.items():
         t0 = time.time()
         ids, err = _get(f"{base}/mempool/txids")
