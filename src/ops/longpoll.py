@@ -32,6 +32,7 @@ import os
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -87,6 +88,39 @@ def write(dataset: str, df: pd.DataFrame, run_id: str, quiet: bool = False) -> P
     return p
 
 
+def _quote_round():
+    """Every quote-shaped collector, run OFF the main loop.
+
+    These take ~140s of wall clock, nearly all of it deliberate pacing (see e10_quotes._MIN_GAP,
+    added after LI.FI answered 429 to 19.5% of requests). Running them inline starved the 2s
+    Bitcoin fee sampling for that entire window -- roughly 40 minutes of a 4.5h run -- and that
+    sampling feeds the fee-accuracy study directly.
+
+    Safe on a worker thread because these collectors share NO state with the mempool trackers:
+    each opens its own HTTP connections and returns a fresh DataFrame, which the main thread
+    appends. Nothing here touches `tracker`, `btc` or `ltc`.
+    """
+    q, r = e10_quotes.sample()
+    return q, r, e12_onramp.sample(), e13_remit.sample(), e17_perpdepth.sample()
+
+
+def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_rows, failures):
+    """Drain a finished quote round. Returns True if the future was consumed."""
+    if fut is None or not fut.done():
+        return False
+    try:
+        _q, _r, _o, _rm, _d = fut.result()
+        quote_rows.append(_q)
+        if len(_r):
+            route_rows.append(_r)
+        onramp_rows.append(_o)
+        remit_rows.append(_rm)
+        depth_rows.append(_d)
+    except Exception as exc:
+        failures.append(f"quote round: {exc}")
+    return True
+
+
 def _checkpoint(run_id: str, tracker, div_rows, btc, btc_div_rows, quote_rows=()) -> None:
     """Partial write of everything held in memory. For E1 the fate of anything not yet mined is
     'unresolved', because reconciliation has not run -- never claim 'dropped' without evidence."""
@@ -135,6 +169,8 @@ def main() -> int:
     quote_rows: list[pd.DataFrame] = []
     route_rows: list[pd.DataFrame] = []
     depth_rows: list[pd.DataFrame] = []
+    quote_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='quotes')
+    quote_future = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -230,17 +266,13 @@ def main() -> int:
                     failures.append(f"e11 blocks: {exc}")
                 last_ltc_block = now
 
-            if now - last_quote >= QUOTE_EVERY_S:
-                try:
-                    _q, _r = e10_quotes.sample()
-                    quote_rows.append(_q)
-                    if len(_r):
-                        route_rows.append(_r)
-                    onramp_rows.append(e12_onramp.sample())
-                    remit_rows.append(e13_remit.sample())
-                    depth_rows.append(e17_perpdepth.sample())
-                except Exception as exc:
-                    failures.append(f"e10/e12/e13: {exc}")
+            # Non-blocking: collect a finished round, then start the next one. The main loop
+            # must never wait on these -- see _quote_round.
+            if _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
+                               remit_rows, depth_rows, failures):
+                quote_future = None
+            if quote_future is None and now - last_quote >= QUOTE_EVERY_S:
+                quote_future = quote_pool.submit(_quote_round)
                 last_quote = now
 
             if now - last_ckpt >= CHECKPOINT_EVERY_S:
@@ -254,6 +286,17 @@ def main() -> int:
             time.sleep(POLL_S)
     except KeyboardInterrupt:
         print("\n  interrupted -- reconciling what was collected", flush=True)
+
+    # A round still in flight holds real observations. Give it a bounded chance to land rather
+    # than discarding it, but never let it delay reconciliation indefinitely.
+    if quote_future is not None:
+        try:
+            quote_future.result(timeout=180)
+        except Exception as exc:
+            failures.append(f"quote round (final): {exc}")
+        _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
+                        remit_rows, depth_rows, failures)
+    quote_pool.shutdown(wait=False)
 
     # Final catch-up and reconciliation. Anything seen, never mined, and absent from the pool is
     # genuinely DROPPED -- rows that exist nowhere else.
