@@ -91,7 +91,19 @@ CHAINS = {
 # fee and vsize per entry -- the only bulk fee source found. Probed 2026-08-28: ankr answers 200
 # with a null result, blockchain.info 404s, nownodes 422s, getblock does not resolve. This is the
 # only keyless one that works, so a failure here degrades coverage rather than breaking the run.
-NODE_RPC = os.environ.get("DF_BTC_NODE_RPC", "https://bitcoin-rpc.publicnode.com")
+# Ordered by MEMPOOL SIZE, which is what decides coverage. These nodes disagree enormously
+# because maxmempool and peering differ: measured at one instant, tatum held 81,381 transactions
+# (maxmempool 4 GB), publicnode 28,856 (256 MB) and drpc 6,096 (300 MB), against mempool.space's
+# 86,532. Overlap with our tracked set is 92.8% for tatum against 34.1% for publicnode, so the
+# choice of node is worth more than any amount of per-transaction polling.
+# Probed 2026-08-28: 1rpc returns non-JSON, blastapi 403s, nodies does not resolve, blockchair
+# 404s, omniexplorer 405s. A failure here degrades coverage; it never breaks the run.
+NODE_RPCS = [
+    ("tatum", "https://bitcoin-mainnet.gateway.tatum.io"),
+    ("publicnode", "https://bitcoin-rpc.publicnode.com"),
+    ("drpc", "https://bitcoin.drpc.org"),
+]
+NODE_RPC = os.environ.get("DF_BTC_NODE_RPC", NODE_RPCS[0][1])
 
 BASELINE_POLLS = 3      # union of the first N polls defines "was already here"
 # ABSENT_POLLS IS TUNED FROM MEASUREMENT, and it is the lever that matters. At 3 the primary
@@ -152,6 +164,7 @@ class BtcMempoolTracker:
         # Per-transaction mempool STRUCTURE, available only from a full node and discarded by
         # every other source we poll. Keyed by txid; see snapshot_node_fees.
         self.node_meta: dict[str, dict] = {}
+        self.node_source = None     # which RPC actually answered
         self.node_pool_size: list[tuple[float, int, int]] = []   # (ts, node_count, our_count)
         self._pre_worklist: list[str] | None = None
         # FEE RATE PER TRANSACTION. Without it this dataset can describe WHEN things happened
@@ -331,6 +344,21 @@ class BtcMempoolTracker:
                 checked[t] = "gone"           # 404: the provider has no record of it at all
         return checked
 
+    def _rpc(self, url: str, method: str, params: list, timeout: int = 180):
+        """One JSON-RPC call, gzipped. Returns (result, error); never raises into the caller."""
+        body = json.dumps({"jsonrpc": "1.0", "id": "dataforge",
+                           "method": method, "params": params}).encode()
+        try:
+            req = urllib.request.Request(url, data=body, headers={
+                **HDRS, "Content-Type": "application/json", "Accept-Encoding": "gzip"})
+            r = urllib.request.urlopen(req, timeout=timeout)
+            raw = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            return json.loads(raw).get("result"), None
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {str(exc)[:70]}"
+
     def snapshot_node_fees(self, url: str = NODE_RPC) -> int:
         """Learn the fee of EVERY transaction in a full node's mempool, in one request.
 
@@ -354,19 +382,16 @@ class BtcMempoolTracker:
         Gzip is requested explicitly: it cuts the wire cost 16.8 MB -> 4.6 MB, and this is a free
         public service.
         """
-        body = json.dumps({"jsonrpc": "1.0", "id": "dataforge",
-                           "method": "getrawmempool", "params": [True]}).encode()
-        try:
-            req = urllib.request.Request(url, data=body, headers={
-                **HDRS, "Content-Type": "application/json", "Accept-Encoding": "gzip"})
-            r = urllib.request.urlopen(req, timeout=120)
-            raw = r.read()
-            if r.headers.get("Content-Encoding") == "gzip":
-                raw = gzip.decompress(raw)
-            entries = json.loads(raw).get("result")
-        except Exception:
-            self.n_failed += 1
-            return 0
+        # Try the largest mempool first and fall back. Coverage is decided by which node
+        # answers, so a fallback is not merely resilience -- it is the difference between 93%
+        # and 34%, and the run should say which it got rather than quietly degrade.
+        entries = None
+        for name, u in ([(("override"), url)] if url != NODE_RPC else NODE_RPCS):
+            got, err = self._rpc(u, "getrawmempool", [True])
+            if isinstance(got, dict) and got:
+                entries = got
+                self.node_source = name
+                break
         if not isinstance(entries, dict):
             self.n_failed += 1
             return 0
@@ -520,26 +545,31 @@ def divergence() -> pd.DataFrame:
     # explorer nodes, so comparing only those understates how much node policy and peering
     # actually diverge. `getrawmempool false` returns txids alone -- 1.0 MB gzipped in 0.4s,
     # against 4.6 MB for the fee-bearing form -- which is cheap enough for this cadence.
-    t0 = time.time()
-    node_ids, node_err = None, None
-    try:
-        body = json.dumps({"jsonrpc": "1.0", "id": "dataforge",
-                           "method": "getrawmempool", "params": [False]}).encode()
-        req = urllib.request.Request(NODE_RPC, data=body, headers={
-            **HDRS, "Content-Type": "application/json", "Accept-Encoding": "gzip"})
-        r = urllib.request.urlopen(req, timeout=60)
-        raw = r.read()
-        if r.headers.get("Content-Encoding") == "gzip":
-            raw = gzip.decompress(raw)
-        node_ids = json.loads(raw).get("result")
-    except Exception as exc:
-        node_err = f"{type(exc).__name__}: {str(exc)[:70]}"
-    ok = isinstance(node_ids, list)
-    views["bitcoin-core-node"] = set(node_ids) if ok else set()
-    rows.append({"sampled_ts": ts, "provider": "bitcoin-core-node",
-                 "n_pending": len(views["bitcoin-core-node"]),
-                 "latency_s": round(time.time() - t0, 3),
-                 "error": None if ok else (node_err or "bad payload")})
+    # ALL the nodes, not just one. They disagree far more with each other than the explorer
+    # APIs do -- 6k / 29k / 81k against mempool.space's 86k -- and that spread IS the finding.
+    # txids only: 1.0 MB gzipped in 0.4s for publicnode, cheap enough for this cadence.
+    for nname, nurl in NODE_RPCS:
+        t0 = time.time()
+        ids, nerr = None, None
+        try:
+            body = json.dumps({"jsonrpc": "1.0", "id": "dataforge",
+                               "method": "getrawmempool", "params": [False]}).encode()
+            req = urllib.request.Request(nurl, data=body, headers={
+                **HDRS, "Content-Type": "application/json", "Accept-Encoding": "gzip"})
+            r = urllib.request.urlopen(req, timeout=90)
+            raw = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            ids = json.loads(raw).get("result")
+        except Exception as exc:
+            nerr = f"{type(exc).__name__}: {str(exc)[:70]}"
+        ok = isinstance(ids, list)
+        key = f"node:{nname}"
+        views[key] = set(ids) if ok else set()
+        rows.append({"sampled_ts": ts, "provider": key,
+                     "n_pending": len(views[key]),
+                     "latency_s": round(time.time() - t0, 3),
+                     "error": None if ok else (nerr or "bad payload")})
 
     for name, base in PROVIDERS.items():
         t0 = time.time()
