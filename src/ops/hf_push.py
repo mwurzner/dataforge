@@ -154,9 +154,31 @@ Most of these came out of getting something wrong first.
 - We only call something dropped once it is missing from the chain, missing from two providers'
   pools, and missing for ten polls running. Weaker tests do not work: a plain poll-to-poll diff
   invented 642 "drops" in 200 seconds and every one we checked was still in the mempool.
-- `fee_rate_sat_vb` is present on roughly a fifth of observed arrivals, sampled from the recent
-  feed. It is never estimated for the rest, because a guessed fee rate would ruin the analyses
-  the column exists for.
+- `fee_rate_sat_vb` is PARTIAL, and its coverage IMPROVES over the life of the dataset. It is
+  sampled from the recent-arrivals feed, which returns only the ten newest transactions per call,
+  so coverage is bounded by how often we call it. It is never estimated for the rest, because a
+  guessed fee rate would ruin the analyses the column exists for.
+  Measured coverage, as a share of arrivals we actually observed (`pre_existing == False`):
+  **2026-08-25 none, 2026-08-26 ~4%, 2026-08-27 ~14%, 2026-08-28 ~16%.** Three things held it
+  down, all fixed on 2026-08-28: fee capture did not exist on the first day; the quote collectors
+  shared a thread with the sampler and blocked it for ~40 minutes of every 4.5-hour run; and the
+  sampler's intended 2-second cadence never actually ran, because it was checked inside a loop
+  that sleeps 5 seconds. Later partitions are denser than earlier ones.
+  **Even repaired, 100% is not attainable, and the reason is worth understanding before you rely
+  on this column.** The feed returns only the TEN NEWEST transactions per call, so capture is
+  capped at 10 per poll however fast we ask. Measured Bitcoin arrival rates ran between 4.3/s and
+  11.0/s within a single hour. At a 2-second cadence the ceiling is 5/s, which is above the quiet
+  rate and well below the busy one -- so coverage is itself a function of network congestion, and
+  is LOWEST exactly when the mempool is most interesting. Treat the sampled set as a sample, and
+  do not assume it is representative across congestion regimes without checking.
+  DO NOT take these figures on trust -- they are computable from the data itself, and any
+  analysis sensitive to coverage should compute them per partition rather than assume a constant:
+  ```python
+  obs = df[~df.pre_existing.astype(bool)]
+  coverage = obs.fee_rate_sat_vb.notna().mean()
+  ```
+  Rows without a fee rate are complete in every other respect (first seen, dwell, fate, blocks
+  waited), so they remain usable for lifecycle work; only fee-conditioned analysis is affected.
 - A fee rate of exactly 0 is real and rare, about 1 in 6,000 of the sampled arrivals, and most of
   those we have seen went on to confirm. Filter on `fee_rate_sat_vb > 0` if a zero would break
   your arithmetic, rather than treating it as a decode fault.
