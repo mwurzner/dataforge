@@ -179,6 +179,20 @@ Most of these came out of getting something wrong first.
   ```
   Rows without a fee rate are complete in every other respect (first seen, dwell, fate, blocks
   waited), so they remain usable for lifecycle work; only fee-conditioned analysis is affected.
+- **`fee_rate_sat_vb` is effectively ABSENT on dropped rows (~1%), and this is structural.**
+  Every dropped transaction observed so far was already in the mempool when its run began
+  (`pre_existing == True`), which follows from the mechanism: a transaction we watch from arrival
+  is mined or still pending within a 4.5-hour window, whereas eviction takes far longer, so only
+  transactions that predate the run live long enough to be dropped. Fees come from the
+  recent-ARRIVALS feed, which by definition never saw them.
+  Recovering the fee afterwards does not work, and this was tested rather than assumed: a
+  transaction that leaves the mempool unmined returns **HTTP 404 immediately** from `/tx/{id}`.
+  A run's confirmed drops were probed and **0 of 147** were retrievable. The provider forgets
+  them at once, so there is no window in which to ask.
+  Related trap, worth knowing if you query the API yourself: `/tx/{id}/status` answers
+  `{"confirmed": false}` for txids that CANNOT EXIST (all-zeros, all-f's were both tested), so
+  that field distinguishes "not in a block" and nothing more. Our drop classification does not
+  rest on it -- pool membership is the discriminator -- but a naive reading of it would be wrong.
 - A fee rate of exactly 0 is real and rare, about 1 in 6,000 of the sampled arrivals, and most of
   those we have seen went on to confirm. Filter on `fee_rate_sat_vb > 0` if a zero would break
   your arithmetic, rather than treating it as a decode fault.
