@@ -193,6 +193,16 @@ Most of these came out of getting something wrong first.
   `{"confirmed": false}` for txids that CANNOT EXIST (all-zeros, all-f's were both tested), so
   that field distinguishes "not in a block" and nothing more. Our drop classification does not
   rest on it -- pool membership is the discriminator -- but a naive reading of it would be wrong.
+- Four columns come from a full Bitcoin node's mempool rather than an explorer API, and are
+  **null for transactions that node did not hold** (~32% coverage, the node's share of the
+  tracked set). None of them survives confirmation or eviction, which is why they are collected:
+  `node_first_seen_ts` (that node's own first-seen clock, an independent check on ours),
+  `rbf_signalled` (BIP-125 replaceability as live mempool state), and `ancestor_count` /
+  `descendant_count` (unconfirmed chains, which is how CPFP fee-bumping appears).
+  A caveat on `node_first_seen_ts` that we have not explained: on transactions where both clocks
+  exist, ours is a median ~7,000s LATER than the node's. Some of that is our polling interval and
+  some is rebroadcast, but not all of it, so treat the two clocks as different measurements
+  rather than one corrected version of the other.
 - A fee rate of exactly 0 is real and rare, about 1 in 6,000 of the sampled arrivals, and most of
   those we have seen went on to confirm. Filter on `fee_rate_sat_vb > 0` if a zero would break
   your arithmetic, rather than treating it as a decode fault.
@@ -389,8 +399,21 @@ def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
     api = HfApi(token=token)
     try:
         api.create_repo(repo_id=repo, repo_type="dataset", private=private, exist_ok=True)
+        # A PUBLIC repo MIRRORS its fixed window; the archive ACCUMULATES. Without this the
+        # upload is purely additive, so moving SAMPLE_START would leave the old week in place
+        # and the free sample would grow with every re-pin -- which is exactly what freezing the
+        # window exists to prevent. Scoped to parquet so the card is never touched, and only for
+        # windowed repos (window is None for the archive, which must never be pruned).
+        extra = {}
+        if window is not None:
+            n = sum(summary.values())
+            if n < 1:
+                raise RuntimeError("refusing to prune a public repo from an empty stage")
+            extra["delete_patterns"] = ["**/*.parquet"]
+            print(f"  {label}: mirroring {n} partitions for {window[0]}..{window[1]} "
+                  f"(stale parquet pruned)", flush=True)
         api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(stage),
-                          commit_message=f"{label}: {date.today().isoformat()}")
+                          commit_message=f"{label}: {date.today().isoformat()}", **extra)
     except Exception as exc:
         # Never fail the run on a publish problem: git already holds the window.
         print(f"  !! HF upload failed for {label}: {type(exc).__name__}: {str(exc)[:120]}",
