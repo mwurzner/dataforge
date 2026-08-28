@@ -434,11 +434,32 @@ def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
         extra = {}
         if window is not None:
             n = sum(summary.values())
+            # A PARTIAL stage is the dangerous case, not an empty one. If the data checkout were
+            # incomplete, or SAMPLE_START were mistyped to a date matching almost nothing, an
+            # additive upload would merely be a no-op -- but a MIRRORING upload would delete
+            # published partitions. So compare against what the repo already holds and refuse to
+            # shrink it drastically. Deleting collected data is the one irreversible mistake here.
+            try:
+                published = sum(1 for f in api.list_repo_files(repo_id=repo, repo_type="dataset")
+                                if f.endswith(".parquet"))
+            except Exception:
+                published = 0
             if n < 1:
                 raise RuntimeError("refusing to prune a public repo from an empty stage")
-            extra["delete_patterns"] = ["**/*.parquet"]
-            print(f"  {label}: mirroring {n} partitions for {window[0]}..{window[1]} "
-                  f"(stale parquet pruned)", flush=True)
+            if published and n < published * 0.5:
+                print(f"  !! {label}: stage has {n} partitions against {published} published. "
+                      f"REFUSING to mirror -- uploading additively instead. If this is a "
+                      f"deliberate re-pin to a smaller window, set DF_ALLOW_SHRINK=1.",
+                      flush=True)
+                if os.environ.get("DF_ALLOW_SHRINK") != "1":
+                    extra = {}
+                else:
+                    extra["delete_patterns"] = ["**/*.parquet"]
+            else:
+                extra["delete_patterns"] = ["**/*.parquet"]
+            if extra:
+                print(f"  {label}: mirroring {n} partitions for {window[0]}..{window[1]} "
+                      f"(stale parquet pruned; repo held {published})", flush=True)
         api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(stage),
                           commit_message=f"{label}: {date.today().isoformat()}", **extra)
     except Exception as exc:
