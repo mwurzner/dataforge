@@ -102,6 +102,7 @@ WINDOWED = {
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
     "e16_dex_routes", "e17_perp_depth",
     "e18_attestation_pool", "e20_stratum_jobs_direct",
+    "e21_btc_block_propagation", "e21_btc_p2p_peers",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -157,6 +158,30 @@ operator on two endpoints, 10 seconds apart.
 | name | one row is |
 |---|---|
 | `e20_stratum_jobs_direct` | one `mining.notify` from one pool: the block it builds on, its nTime, coinbase, merkle branch count and clean-jobs flag |
+| `e21_btc_block_propagation` | one peer announcing one block to us, timestamped -- the propagation curve, peer by peer |
+| `e21_btc_p2p_peers` | one peer we connected to: user agent, services, handshake outcome |
+
+## Block propagation
+
+The second half of the story. Pool templates say what miners are building on; propagation says how
+fast the network learned there was something new to build on. We connect to ~120 Bitcoin peers as
+an ordinary node and record when each of them announces each new block.
+
+One observation across four blocks:
+
+| peers | first to median | full spread |
+|---|---|---|
+| 32 | 0.39s | 3.74s |
+| 31 | 0.27s | 2.00s |
+| 33 | 0.45s | **52.37s** |
+
+Half the network reaches us within about 0.4 seconds. The tail is the interesting part: in the
+third block one peer was **52 seconds** behind. Nothing on chain records that a peer was ever that
+far behind, because the block itself carries only the miner's claimed timestamp.
+
+Collected over Bitcoin's own P2P protocol, which is permissionless by design -- we participate as
+a node, exactly as the protocol intends, with `fRelay=0` so peers do not send us transaction
+announcements we would discard.
 
 ## How it was collected
 
@@ -183,6 +208,14 @@ require a valid payout address and are therefore EXCLUDED rather than handed an 
   carried on every row so a gap can be told from a quiet pool.
 - Merkle branches are stored as a count plus the first entry. The count plus the coinbase
   identifies a distinct template; the full branch list is large and mostly redundant.
+- **Propagation times are OUR clock and include our latency to each peer**, which varies with
+  geography. Differences of milliseconds between peers are partly network distance to us;
+  differences of seconds are real. `peer_addr` is kept so you can control for it.
+- **One vantage point.** We see when peers told US, not when they learned. Academic monitor nodes
+  connect to all ~27,000 reachable peers; we hold ~120. Treat this as a sample of the network,
+  never as the network.
+- **A peer that disconnects stops announcing**, which looks like slowness. `e21_btc_p2p_peers`
+  carries handshake state per peer so a gap can be told from a silence.
 - `clean_jobs = true` is the interesting flag: it means the pool has switched blocks. Sorting
   those by `observed_ts` gives the propagation order across pools for each new block.
 '''
@@ -250,11 +283,12 @@ In a well-observed slot the two counts agree to within about 0.5% (roughly 28,16
 
 PRODUCTS = {
     "bitcoin-mining-pool-templates": {
-        "datasets": ["e20_stratum_jobs_direct", MANIFEST],
+        "datasets": ["e20_stratum_jobs_direct", "e21_btc_block_propagation",
+                     "e21_btc_p2p_peers", MANIFEST],
         "example": "e20_stratum_jobs_direct",
         "pretty": "What each Bitcoin mining pool is building on, second by second",
-        "tags": ["bitcoin", "mining", "mining-pools", "stratum", "blockchain",
-                 "propagation", "time-series"],
+        "tags": ["bitcoin", "mining", "mining-pools", "stratum", "p2p", "network",
+                 "block-propagation", "blockchain", "time-series"],
         "size": "100K<n<1M",
         "body": MINING_CARD,
     },

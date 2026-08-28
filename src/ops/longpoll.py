@@ -42,7 +42,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
-                           e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct)
+                           e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct,
+                           e21_btc_p2p)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -150,6 +151,22 @@ def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list,
             if len(failures) < 200:
                 failures.append(f"e8 node snapshot ({label}): {exc}")
         stop.wait(every or RPC_MEMPOOL_EVERY_S)
+
+
+def _p2p_reader(p2p, stop: "threading.Event", failures: list) -> None:
+    """Hold Bitcoin P2P peer connections for the run.
+
+    Own thread: the collector blocks in select() across ~120 sockets. Touches only its own
+    object, and reconnects internally as peers drop.
+    """
+    # ONE long call, not a loop of short ones: run() closes its peers on return, so a short
+    # cycle rebuilt the whole peer set every time and left almost nobody attached when a block
+    # actually arrived.
+    try:
+        p2p.run(duration_s=DURATION_S + 600, stop=stop)
+    except Exception as exc:
+        if len(failures) < 200:
+            failures.append(f"e21: {exc}")
 
 
 def _stratum_direct_reader(sd, stop: "threading.Event", failures: list) -> None:
@@ -291,6 +308,7 @@ def main() -> int:
     attp = e18_attpool.AttestationPoolTracker()
     strat = e19_stratum.StratumJobCollector()
     sdirect = e20_stratum_direct.DirectStratumCollector()
+    p2p = e21_btc_p2p.BlockPropagationCollector(target=120)
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
     preconf = e14_preconf.make_watchers()
@@ -318,6 +336,7 @@ def main() -> int:
     attp_thread = None
     strat_thread = None
     sdirect_thread = None
+    p2p_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -341,6 +360,9 @@ def main() -> int:
     strat_thread = threading.Thread(target=_stratum_reader, args=(strat, fee_stop, failures),
                                     name="stratum-jobs", daemon=True)
     strat_thread.start()
+    p2p_thread = threading.Thread(target=_p2p_reader, args=(p2p, fee_stop, failures),
+                                  name="btc-p2p", daemon=True)
+    p2p_thread.start()
     sdirect_thread = threading.Thread(target=_stratum_direct_reader,
                                       args=(sdirect, fee_stop, failures),
                                       name="stratum-direct", daemon=True)
@@ -478,6 +500,8 @@ def main() -> int:
         strat_thread.join(timeout=15)
     if sdirect_thread is not None:
         sdirect_thread.join(timeout=15)
+    if p2p_thread is not None:
+        p2p_thread.join(timeout=20)
 
     if quote_future is not None:
         try:
@@ -628,6 +652,30 @@ def main() -> int:
               f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
               flush=True)
         write(e13_remit.DATASET, rdf, run_id)
+
+    pdf = p2p.frame()
+    # ALWAYS report, even with zero blocks. Bitcoin produces a block every ~10 minutes, so a
+    # short window legitimately catches none -- and a silent E21 would look identical whether it
+    # was quiet or broken. The handshake count is what distinguishes the two.
+    if not len(pdf):
+        print(f"  E21: 0 blocks seen (window too short or no block) | "
+              f"handshakes {p2p.n_handshakes} peers-held {len(p2p.state)} "
+              f"connect-fails {p2p.n_connect_fail} disconnects {p2p.n_disconnect}", flush=True)
+        ppf0 = p2p.peer_frame()
+        if len(ppf0):
+            write(e21_btc_p2p.PEER_DATASET, ppf0, run_id)
+    if len(pdf):
+        sp = pdf.groupby("block_hash").received_ts.agg(["min", "max", "count", "median"])
+        sp = sp[sp["count"] > 1]
+        med = float((sp["median"] - sp["min"]).median()) if len(sp) else None
+        med_s = f"{med:.2f}s" if med is not None else "n/a (no block seen by >1 peer)"
+        print(f"  E21: {len(pdf):,} announcements over {pdf.block_hash.nunique()} blocks "
+              f"from {pdf.peer_addr.nunique()} peers | median first->median-peer {med_s} "
+              f"| handshakes {p2p.n_handshakes} fails {p2p.n_connect_fail}", flush=True)
+        write(e21_btc_p2p.DATASET, pdf, run_id)
+        ppf = p2p.peer_frame()
+        if len(ppf):
+            write(e21_btc_p2p.PEER_DATASET, ppf, run_id)
 
     ddf = sdirect.frame()
     if len(ddf):
