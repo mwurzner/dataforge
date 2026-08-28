@@ -8,7 +8,7 @@ Every candidate dataset checked against the scarcity criterion, and why it faile
 
 Kept because it is the most reusable thing this project has produced. The recurring shape:
 **if a dataset is valuable and accessible, a vendor has already built it.** What survives sits
-where the buyer base is real but unformed. Hit rate to date: **6 built of 23 checked.**
+where the buyer base is real but unformed. Hit rate to date: **6 built of 24 checked** (1 blocked on terms rather than unavailable).
 
 The discipline, in order, and it is not negotiable — three of the four surviving datasets were
 found this way, and the one that was not had to be withdrawn:
@@ -45,6 +45,7 @@ found this way, and the one that was not had to be withdrawn:
 | 21 | **Bitcoin block templates** (what a node WOULD mine) | see below |
 | 22 | node peer topology (`getpeerinfo`) | gateway returns **501 Not Implemented**; no keyless source |
 | 23 | **MEV-Boost relay bids** (incl. losing bids) | Flashbots' own **relayscan.io Bid Archive** publishes all of it, monthly, back to 2024 |
+| 24 | **Stratum mining-pool job data** | **BLOCKED ON TERMS, not on data** -- passes rarity and access; see below |
 
 ## 17 — npm / PyPI yanked releases (killed 2026-08-27)
 
@@ -161,7 +162,40 @@ check in this domain and it costs one search.
 
 Cost to kill: one search.
 
-## Survived
+## 24 — Stratum mining-pool job data (BLOCKED 2026-08-28)
+
+**This one passed both technical tests and was stopped on conduct.** Recorded separately from the
+kills because permission would unblock it; the data is there and unheld.
+
+RARITY: clean. `stratum.work` streams pool `mining.notify` messages live and stores nothing --
+no archive, no export, no API, no retention policy. No historical stratum dataset found anywhere.
+
+ACCESS: works. Two of four pools delivered full jobs within seconds, and the first sample already
+showed the signal -- braiins and viabtc on the SAME previous block with `ntime` 25 seconds apart
+and coinbase structures of 114 vs 218 characters. That is pool-to-pool template timing, and no
+chain records it.
+
+TERMS: **silent, which is not the same as permissive.**
+  * solo.ckpool.org -- "No registration required", but asks users to minimise bandwidth.
+  * Braiins -- terms cover mining operations; silent on automated access or data collection.
+  * ViaBTC -- terms page does not render; a broad clause reserves the right to terminate access
+    for conduct creating "problems or possible legal liabilities".
+
+THE DECIDING CONCERN, which is about conduct rather than law: `stratum.work` does this openly as
+a FREE PUBLIC TRANSPARENCY TOOL. We would hold persistent connections to commercial pools,
+consume their infrastructure, contribute no hashrate, and SELL the result. A pool operator could
+reasonably object to that even where the terms do not anticipate it.
+
+TO UNBLOCK: written permission from specific pools (Braiins is developer-friendly and might well
+agree), or restrict to explicitly permissive pools -- though ckpool and public-pool.io are small
+solo pools, so that version answers a much weaker question, since the value is in comparing pools
+with real hashrate.
+
+A PROCESS NOTE ON MY OWN CONDUCT: the access probe authenticated with a Bitcoin address I
+invented. If a fabricated address were real and a block were ever found, rewards would route to a
+stranger. Any future work here uses the operator's own address or an explicitly non-address
+worker name. Inventing one, even for a test, was careless.
+
 
 | # | candidate | status |
 |---|---|---|
