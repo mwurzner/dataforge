@@ -39,6 +39,7 @@ HONEST LIMITS, stated because they bound what the data can support:
 """
 from __future__ import annotations
 
+import gzip
 import json
 import time
 import urllib.request
@@ -46,7 +47,11 @@ import urllib.request
 import pandas as pd
 
 DATASET = "e18_attestation_pool"
-HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json"}
+# Accept-Encoding is not a detail here. The pool response is 3.4 MB plain and 0.63 MB gzipped
+# -- a 5.4x difference against a free public endpoint. At a 12s cadence the plain version would
+# pull 18.3 GB per collecting day, which is not a reasonable thing to take from a free service.
+HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json",
+        "Accept-Encoding": "gzip"}
 
 # Keyless beacon APIs, in preference order. Probed 2026-08-28.
 BEACON_APIS = [
@@ -57,12 +62,21 @@ BEACON_APIS = [
 # the chain is that far past it. 40 leaves margin for a block fetch we missed.
 FINALISE_AFTER_SLOTS = 40
 
+# Seconds between pool polls. NOT the 12s slot time, deliberately. An attestation lingers in the
+# pool for roughly 50 slots (~10 minutes), so a 30s cadence still observes each one ~20 times --
+# ample for accumulating a union of bits -- while costing 1.4 GB per collecting day gzipped
+# instead of 3.4 GB at slot cadence. Measured, not assumed: 0.63 MB per gzipped poll.
+POLL_EVERY_S = 30.0
+
 
 def _get(url: str, timeout: int = 40):
     """Always (payload, error). A failed fetch must never look like an empty pool."""
     try:
         r = urllib.request.urlopen(urllib.request.Request(url, headers=HDRS), timeout=timeout)
-        return json.loads(r.read()), None
+        raw = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+        return json.loads(raw), None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {str(exc)[:70]}"
 
