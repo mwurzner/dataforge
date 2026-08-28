@@ -8,7 +8,7 @@ Every candidate dataset checked against the scarcity criterion, and why it faile
 
 Kept because it is the most reusable thing this project has produced. The recurring shape:
 **if a dataset is valuable and accessible, a vendor has already built it.** What survives sits
-where the buyer base is real but unformed. Hit rate to date: **6 built of 24 checked** (1 blocked on terms rather than unavailable).
+where the buyer base is real but unformed. Hit rate to date: **7 built of 24 checked.**
 
 The discipline, in order, and it is not negotiable — three of the four surviving datasets were
 found this way, and the one that was not had to be withdrawn:
@@ -45,7 +45,7 @@ found this way, and the one that was not had to be withdrawn:
 | 21 | **Bitcoin block templates** (what a node WOULD mine) | see below |
 | 22 | node peer topology (`getpeerinfo`) | gateway returns **501 Not Implemented**; no keyless source |
 | 23 | **MEV-Boost relay bids** (incl. losing bids) | Flashbots' own **relayscan.io Bid Archive** publishes all of it, monthly, back to 2024 |
-| 24 | **Stratum mining-pool job data** | **BLOCKED ON TERMS, not on data** -- passes rarity and access; see below |
+| 24 | **Stratum mining-pool job data** | **UNBLOCKED and BUILT** via a third-party public feed; see below |
 
 ## 17 — npm / PyPI yanked releases (killed 2026-08-27)
 
@@ -162,7 +162,7 @@ check in this domain and it costs one search.
 
 Cost to kill: one search.
 
-## 24 — Stratum mining-pool job data (BLOCKED 2026-08-28)
+## 24 — Stratum mining-pool job data (BLOCKED, then UNBLOCKED, 2026-08-28)
 
 **This one passed both technical tests and was stopped on conduct.** Recorded separately from the
 kills because permission would unblock it; the data is there and unheld.
@@ -195,6 +195,28 @@ A PROCESS NOTE ON MY OWN CONDUCT: the access probe authenticated with a Bitcoin 
 invented. If a fabricated address were real and a block were ever found, rewards would route to a
 stranger. Any future work here uses the operator's own address or an explicitly non-address
 worker name. Inventing one, even for a test, was careless.
+
+### HOW IT WAS UNBLOCKED
+
+The pool-terms problem existed only because WE would be the ones connecting. stratum.work already
+does that collecting as a public transparency tool, and documents `GET /api/stream` "allowing for
+custom integrations". Consuming that is the intended use, touches no pool, and is strictly better
+data: 30 pools in ONE stream with pool names already resolved, against 2 of 4 pools reachable when
+connecting directly.
+
+Measured on the first minute: 30 pools on the same previous block with **39 seconds of ntime
+spread**, and merkle-branch counts of 9, 10 and 13 -- different templates for the same block.
+~26 MB/day, 6 invariants passing.
+
+**PUBLICATION REMAINS GATED, and this is a legal gate, not caution.** Collecting for our own use
+raises nothing. REDISTRIBUTING or SELLING a systematic extraction of a third party's compiled
+stream engages the **EU sui generis database right**, which protects the compiler's investment
+independently of copyright -- and the source repo carries **no LICENCE** granting redistribution.
+The operator is in the Netherlands, so EU law applies directly.
+
+So e19 is in `ARCHIVE_ONLY`: it accrues privately, because a day not collected is lost forever,
+and it appears in NO published product until bboerst agrees in writing. Credit to him and to
+0xB10C (whose idea it was) is mandatory in any published form.
 
 
 | # | candidate | status |

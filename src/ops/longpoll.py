@@ -42,7 +42,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
-                           e17_perpdepth, e18_attpool)
+                           e17_perpdepth, e18_attpool, e19_stratum)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -152,6 +152,21 @@ def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list,
         stop.wait(every or RPC_MEMPOOL_EVERY_S)
 
 
+def _stratum_reader(strat, stop: "threading.Event", failures: list) -> None:
+    """Hold the stratum.work SSE stream open for the run.
+
+    A stream rather than a poll, so it gets its own thread and simply stays connected; the
+    collector reconnects internally and counts drops. Touches only its own object.
+    """
+    while not stop.is_set():
+        try:
+            strat.run(duration_s=60)
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e19: {exc}")
+            stop.wait(5.0)
+
+
 def _attpool_sampler(attp, stop: "threading.Event", failures: list) -> None:
     """Poll the beacon attestation pool on the slot clock (12s).
 
@@ -259,6 +274,7 @@ def main() -> int:
     # endpoints). Tiny pool (~10 KB a poll), no second provider, so no cross-check and no
     # divergence sampling; the frame records that honestly rather than faking a weaker claim.
     attp = e18_attpool.AttestationPoolTracker()
+    strat = e19_stratum.StratumJobCollector()
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
     preconf = e14_preconf.make_watchers()
@@ -284,6 +300,7 @@ def main() -> int:
     node_fast_thread = None
     ltc_node_thread = None
     attp_thread = None
+    strat_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -304,6 +321,9 @@ def main() -> int:
     attp_thread = threading.Thread(target=_attpool_sampler, args=(attp, fee_stop, failures),
                                    name="attestation-pool", daemon=True)
     attp_thread.start()
+    strat_thread = threading.Thread(target=_stratum_reader, args=(strat, fee_stop, failures),
+                                    name="stratum-jobs", daemon=True)
+    strat_thread.start()
     ltc_node_thread = threading.Thread(
         target=_node_fee_snapshotter,
         args=(ltc, fee_stop, failures, e8_btc_mempool.LTC_NODES, RPC_MEMPOOL_EVERY_S, "ltc"),
@@ -433,6 +453,8 @@ def main() -> int:
         ltc_node_thread.join(timeout=15)
     if attp_thread is not None:
         attp_thread.join(timeout=15)
+    if strat_thread is not None:
+        strat_thread.join(timeout=15)
 
     if quote_future is not None:
         try:
@@ -583,6 +605,13 @@ def main() -> int:
               f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
               flush=True)
         write(e13_remit.DATASET, rdf, run_id)
+
+    sdf = strat.frame()
+    if len(sdf):
+        print(f"  E19: {len(sdf):,} stratum jobs from {sdf.pool_name.nunique()} pools "
+              f"| {sdf.prev_hash.nunique()} distinct prev_hash "
+              f"| reconnects {strat.n_reconnects} parse-fail {strat.n_parse_fail}", flush=True)
+        write(e19_stratum.DATASET, sdf, run_id)
 
     attp.finalise(force=True)
     adf = attp.frame()

@@ -105,7 +105,15 @@ WINDOWED = {
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
-                "b5_dormancy", "universe"}
+                "b5_dormancy", "universe",
+                # e19 is DELIBERATELY archive-only, and this is a legal gate rather than an
+                # oversight. The stratum jobs are collected from stratum.work's public SSE feed,
+                # which is their compiled database. Collecting it for our own use raises nothing;
+                # REDISTRIBUTING or SELLING a systematic extraction engages the EU sui generis
+                # database right, and the source repo carries no licence granting redistribution.
+                # Do not move this into PRODUCTS until the maintainer (bboerst) has agreed in
+                # writing, and even then credit him and 0xB10C prominently.
+                "e19_stratum_jobs"}
 
 _SHARED_TAIL = """
 ## Coverage
