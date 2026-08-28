@@ -8,7 +8,7 @@ Every candidate dataset checked against the scarcity criterion, and why it faile
 
 Kept because it is the most reusable thing this project has produced. The recurring shape:
 **if a dataset is valuable and accessible, a vendor has already built it.** What survives sits
-where the buyer base is real but unformed. Hit rate to date: **5 built of 22 checked.**
+where the buyer base is real but unformed. Hit rate to date: **6 built of 23 checked.**
 
 The discipline, in order, and it is not negotiable — three of the four surviving datasets were
 found this way, and the one that was not had to be withdrawn:
@@ -44,6 +44,7 @@ found this way, and the one that was not had to be withdrawn:
 | 20 | **stock borrow fees / short availability** | see below |
 | 21 | **Bitcoin block templates** (what a node WOULD mine) | see below |
 | 22 | node peer topology (`getpeerinfo`) | gateway returns **501 Not Implemented**; no keyless source |
+| 23 | **MEV-Boost relay bids** (incl. losing bids) | Flashbots' own **relayscan.io Bid Archive** publishes all of it, monthly, back to 2024 |
 
 ## 17 — npm / PyPI yanked releases (killed 2026-08-27)
 
@@ -137,6 +138,28 @@ The template itself is ephemeral; the ANSWER it would give is archived. Same sha
 -- the ephemerality of an input does not matter when the output is already published.
 
 Cost to kill: four minutes.
+
+## 23 — MEV-Boost relay bids (killed 2026-08-28)
+
+Relays receive many builder bids per slot and only one wins, so the LOSING bids never touch the
+chain and relays retain them only briefly. A textbook fit for the criterion.
+
+**Flashbots already publishes the whole thing.** [relayscan.io's Bid Archive](https://bidarchive.relayscan.io/)
+is "a full, public archive of bids across relays", organised by month and running from 2024
+through 2025, and the collector is open source.
+
+## THE SCREENING SHORTCUT THIS REVEALS
+
+This is the SECOND idea killed by Flashbots specifically -- candidate 1, the Ethereum mempool,
+died to their CC-0 Mempool Dumpster. That is not coincidence: **Flashbots publishes MEV-adjacent
+data openly as a matter of policy**, because transparency of the MEV supply chain is their stated
+mission.
+
+So any Ethereum MEV-adjacent candidate -- mempool, bids, relays, builders, bundles, order flow --
+should be checked against Flashbots FIRST, before anything else. It is the single highest-yield
+check in this domain and it costs one search.
+
+Cost to kill: one search.
 
 ## Survived
 
