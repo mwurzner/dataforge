@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import random
 import time
 import urllib.request
 
@@ -136,6 +137,9 @@ class BtcMempoolTracker:
         self.n_failed = 0
         self.n_verified = 0
         self.n_flicker = 0          # candidates the status check proved were never gone
+        self.n_pre_fee_ok = 0       # pre-existing txs whose fee we captured while still pending
+        self.n_pre_fee_miss = 0     # ...and those already gone by the time we asked
+        self._pre_worklist: list[str] | None = None
         # FEE RATE PER TRANSACTION. Without it this dataset can describe WHEN things happened
         # but not WHY, and no fee-market question can be asked of it -- which only became
         # obvious when a study needed the column and it was not there. The txid list carries no
@@ -312,6 +316,53 @@ class BtcMempoolTracker:
             else:
                 checked[t] = "gone"           # 404: the provider has no record of it at all
         return checked
+
+    def sample_pre_existing_fee(self) -> bool:
+        """Capture fee and vsize for ONE pre-existing transaction, while it is still pending.
+
+        WHY THIS EXISTS. Every dropped transaction in the dataset so far is `pre_existing`: a
+        transaction watched from arrival is mined or still pending inside a 4.5h run, so only
+        ones that predate the run live long enough to be evicted. But fees come from the
+        recent-ARRIVALS feed, which by definition never saw them -- leaving drop rows, the most
+        valuable in the dataset, at ~1% fee coverage.
+
+        Recovering it AFTER the drop is impossible, and that was measured rather than assumed:
+        `/tx/{id}` returns 404 immediately once a transaction leaves the mempool unmined, and 0
+        of 147 confirmed drops were retrievable. So the only moment to capture the fee is while
+        the transaction is still pending, which is what this does.
+
+        UNIFORM AT RANDOM, deliberately. Eviction favours the lowest fee rates, so sampling by
+        any fee-related heuristic would bias exactly the distribution these rows exist to study.
+        A uniform sample of the pending set is representative by construction; a targeted one
+        would quietly not be. The worklist is shuffled once and drained, so no transaction is
+        ever fetched twice and the sample stays uniform across the run.
+
+        `vsize` is null on this endpoint; `weight` is returned instead, and vsize = weight/4 by
+        definition, so the resulting fee rate is exact rather than approximated.
+        """
+        if self._pre_worklist is None:
+            wl = [t for t in self.pre_existing if t not in self.fees]
+            random.shuffle(wl)
+            self._pre_worklist = wl
+        while self._pre_worklist:
+            t = self._pre_worklist.pop()
+            if t in self.fees:
+                continue
+            d, err = _get(f"{self.base}/tx/{t}", timeout=20)
+            if not isinstance(d, dict):
+                # Already evicted, or the provider refused. Counted, never silent.
+                self.n_pre_fee_miss += 1
+                return False
+            fee, weight, vsize = d.get("fee"), d.get("weight"), d.get("vsize")
+            if not isinstance(vsize, int) or vsize <= 0:
+                vsize = (weight // 4) if isinstance(weight, int) and weight >= 4 else None
+            if isinstance(fee, int) and isinstance(vsize, int) and vsize > 0:
+                self.fees[t] = (fee, vsize)
+                self.n_pre_fee_ok += 1
+                return True
+            self.n_pre_fee_miss += 1
+            return False
+        return False          # worklist exhausted: every pre-existing tx has been tried
 
     def frame(self) -> pd.DataFrame:
         """One row per tracked transaction. Fate is only ever claimed with evidence."""
