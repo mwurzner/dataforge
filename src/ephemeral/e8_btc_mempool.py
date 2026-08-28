@@ -46,7 +46,9 @@ MEASURED COST: 3.1 MB gzipped per full poll, ~327 new transactions/min, ~471k ro
 from __future__ import annotations
 
 import gzip
+import gzip
 import json
+import os
 import random
 import time
 import urllib.request
@@ -84,6 +86,12 @@ CHAINS = {
             "primary": "https://litecoinspace.org/api",
             "secondary": None},
 }
+
+# A public Bitcoin Core RPC. `getrawmempool true` returns the node's WHOLE mempool with an exact
+# fee and vsize per entry -- the only bulk fee source found. Probed 2026-08-28: ankr answers 200
+# with a null result, blockchain.info 404s, nownodes 422s, getblock does not resolve. This is the
+# only keyless one that works, so a failure here degrades coverage rather than breaking the run.
+NODE_RPC = os.environ.get("DF_BTC_NODE_RPC", "https://bitcoin-rpc.publicnode.com")
 
 BASELINE_POLLS = 3      # union of the first N polls defines "was already here"
 # ABSENT_POLLS IS TUNED FROM MEASUREMENT, and it is the lever that matters. At 3 the primary
@@ -139,6 +147,8 @@ class BtcMempoolTracker:
         self.n_flicker = 0          # candidates the status check proved were never gone
         self.n_pre_fee_ok = 0       # pre-existing txs whose fee we captured while still pending
         self.n_pre_fee_miss = 0     # ...and those already gone by the time we asked
+        self.n_node_snapshots = 0   # full-mempool RPC snapshots taken
+        self.n_node_fees = 0        # fees learned from them that we did not already have
         self._pre_worklist: list[str] | None = None
         # FEE RATE PER TRANSACTION. Without it this dataset can describe WHEN things happened
         # but not WHY, and no fee-market question can be asked of it -- which only became
@@ -316,6 +326,62 @@ class BtcMempoolTracker:
             else:
                 checked[t] = "gone"           # 404: the provider has no record of it at all
         return checked
+
+    def snapshot_node_fees(self, url: str = NODE_RPC) -> int:
+        """Learn the fee of EVERY transaction in a full node's mempool, in one request.
+
+        This is the cheapest large gain available to this dataset. The per-transaction routes are
+        bounded by call frequency -- the arrivals feed returns ten transactions per call, and the
+        pre-existing sampler one -- so both crawl. `getrawmempool true` returns the node's entire
+        mempool with an exact fee and vsize for every entry: measured at 30,683 transactions,
+        100% of them carrying both, for 4.6 MB gzipped in 2.2 seconds.
+
+        MEASURED OVERLAP with our tracked set: 34%, against ~9% from an entire run of the
+        per-transaction sampler. The two compose rather than compete -- the sampler skips
+        anything already in `self.fees`, so it automatically spends its budget on the remainder.
+
+        ON THE 66% THIS NODE DOES NOT HOLD. The obvious worry is that a smaller mempool means the
+        lowest-fee transactions were screened out, which would be exactly the population that
+        gets evicted and becomes our drop rows. Checked against the node's own config rather than
+        assumed: maxmempool is 256 MB against 8.6 MB in use, so it is not evicting, and
+        mempoolminfee sits at the 0.1 sat/vB floor, so it is not fee-filtering. The gap is
+        propagation, not policy.
+
+        Gzip is requested explicitly: it cuts the wire cost 16.8 MB -> 4.6 MB, and this is a free
+        public service.
+        """
+        body = json.dumps({"jsonrpc": "1.0", "id": "dataforge",
+                           "method": "getrawmempool", "params": [True]}).encode()
+        try:
+            req = urllib.request.Request(url, data=body, headers={
+                **HDRS, "Content-Type": "application/json", "Accept-Encoding": "gzip"})
+            r = urllib.request.urlopen(req, timeout=120)
+            raw = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            entries = json.loads(raw).get("result")
+        except Exception:
+            self.n_failed += 1
+            return 0
+        if not isinstance(entries, dict):
+            self.n_failed += 1
+            return 0
+        self.n_node_snapshots += 1
+        got = 0
+        for txid, e in entries.items():
+            if txid in self.fees:
+                continue
+            vsize = e.get("vsize")
+            base = (e.get("fees") or {}).get("base")
+            if not isinstance(vsize, int) or vsize <= 0 or base is None:
+                continue
+            # `fees.base` is BTC; the dataset stores satoshis, as the arrivals feed does.
+            sat = int(round(float(base) * 1e8))
+            if sat >= 0:
+                self.fees[txid] = (sat, vsize)
+                got += 1
+        self.n_node_fees += got
+        return got
 
     def sample_pre_existing_fee(self) -> bool:
         """Capture fee and vsize for ONE pre-existing transaction, while it is still pending.
