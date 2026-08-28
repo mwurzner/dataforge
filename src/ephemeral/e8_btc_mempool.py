@@ -105,6 +105,22 @@ NODE_RPCS = [
 ]
 NODE_RPC = os.environ.get("DF_BTC_NODE_RPC", NODE_RPCS[0][1])
 
+# TIERED, because mempool SIZE turns out to be a proxy for transaction AGE, and the two tiers
+# solve different halves of the coverage problem. Measured at one instant:
+#     drpc        8,715 txs   1.0 MB   median age    27 min   median fee 2.25 sat/vB
+#     publicnode 32,347 txs   4.8 MB   median age   2.8 h     median fee 0.35 sat/vB
+#     tatum      83,584 txs   9.8 MB   median age    11 days  median fee 0.21 sat/vB
+# A newly arrived transaction is in EVERY node's mempool, so arrivals do not need a big node --
+# they need a FREQUENT one, and the small node is 10x cheaper to poll. The big node is only
+# needed for the old low-fee backlog, which barely changes and can be sampled rarely.
+# Measured dwell explains why this matters: median 10.2 min, and 61.7% of arrivals live under 15
+# minutes, so a 15-minute-only cadence has an arrivals ceiling near 38%. Polling the cheap node
+# every 2 minutes lifts that ceiling to ~93%.
+NODE_FAST = [("drpc", "https://bitcoin.drpc.org"),
+             ("publicnode", "https://bitcoin-rpc.publicnode.com")]
+NODE_DEEP = [("tatum", "https://bitcoin-mainnet.gateway.tatum.io"),
+             ("publicnode", "https://bitcoin-rpc.publicnode.com")]
+
 BASELINE_POLLS = 3      # union of the first N polls defines "was already here"
 # ABSENT_POLLS IS TUNED FROM MEASUREMENT, and it is the lever that matters. At 3 the primary
 # provider generated ~600 candidates per 10 minutes of which the status endpoint confirmed ~100%
@@ -359,7 +375,7 @@ class BtcMempoolTracker:
         except Exception as exc:
             return None, f"{type(exc).__name__}: {str(exc)[:70]}"
 
-    def snapshot_node_fees(self, url: str = NODE_RPC) -> int:
+    def snapshot_node_fees(self, nodes: list | None = None) -> int:
         """Learn the fee of EVERY transaction in a full node's mempool, in one request.
 
         This is the cheapest large gain available to this dataset. The per-transaction routes are
@@ -386,7 +402,7 @@ class BtcMempoolTracker:
         # answers, so a fallback is not merely resilience -- it is the difference between 93%
         # and 34%, and the run should say which it got rather than quietly degrade.
         entries = None
-        for name, u in ([(("override"), url)] if url != NODE_RPC else NODE_RPCS):
+        for name, u in (nodes if nodes is not None else NODE_RPCS):
             got, err = self._rpc(u, "getrawmempool", [True])
             if isinstance(got, dict) and got:
                 entries = got
