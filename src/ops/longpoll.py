@@ -62,6 +62,9 @@ QUOTE_EVERY_S = float(os.environ.get("DF_QUOTE_EVERY_S", 900))
 # otherwise lose the entire window -- and an ephemeral window cannot be re-collected. Writing
 # every 30 min caps the worst-case loss at 30 minutes instead of 5.5 hours.
 CHECKPOINT_EVERY_S = float(os.environ.get("DF_CHECKPOINT_EVERY_S", 1800))
+# Seconds between pre-existing fee lookups. 2.0 gives ~0.5 req/s, about 8,000 transactions over a
+# 4.5h run, roughly 10% of a typical 82,000-transaction opening snapshot. Raise it to back off.
+PRE_FEE_EVERY_S = float(os.environ.get("DF_PRE_FEE_EVERY_S", 2.0))
 # E1 STORAGE MODE. "aggregate" (default) stores a per-minute summary plus full rows for the
 # never-mined transactions, instead of a row per transaction. E1 is 85% of everything this
 # project stores AND is the one dataset established as NOT scarce -- Flashbots publishes the same
@@ -112,6 +115,29 @@ def _fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
             if len(failures) < 200:
                 failures.append(f"e8 recent: {exc}")
         stop.wait(2.0)
+
+
+def _pre_fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
+    """Walk the opening mempool snapshot, capturing fees before those transactions can be evicted.
+
+    Separate from _fee_sampler because it solves the opposite problem. That one covers ARRIVALS,
+    which is where mined rows get their fees. This covers the transactions that were ALREADY
+    pending when the run began -- the only ones that live long enough to be dropped, and
+    therefore the only source of fee data for drop rows.
+
+    Same thread-safety argument as _fee_sampler: this writes to `self.fees`, which nothing else
+    writes, and to two counters where a lost increment is cosmetic. It never touches `seen`,
+    `mined` or `pool`.
+    """
+    # Let poll_pool establish the baseline before draining a worklist built from it.
+    stop.wait(20.0)
+    while not stop.is_set():
+        try:
+            btc.sample_pre_existing_fee()
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e8 pre-fee: {exc}")
+        stop.wait(PRE_FEE_EVERY_S)
 
 
 def _quote_round():
@@ -199,6 +225,7 @@ def main() -> int:
     quote_future = None
     fee_stop = threading.Event()
     fee_thread = None
+    pre_fee_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -208,6 +235,9 @@ def main() -> int:
     fee_thread = threading.Thread(target=_fee_sampler, args=(btc, fee_stop, failures),
                                   name="fee-sampler", daemon=True)
     fee_thread.start()
+    pre_fee_thread = threading.Thread(target=_pre_fee_sampler, args=(btc, fee_stop, failures),
+                                      name="pre-fee-sampler", daemon=True)
+    pre_fee_thread.start()
 
     try:
         while time.time() - t0 < DURATION_S:
@@ -317,6 +347,8 @@ def main() -> int:
     fee_stop.set()
     if fee_thread is not None:
         fee_thread.join(timeout=10)
+    if pre_fee_thread is not None:
+        pre_fee_thread.join(timeout=10)
 
     if quote_future is not None:
         try:
@@ -395,6 +427,15 @@ def main() -> int:
               " ".join(f"{k} {v:,}" for k, v in bdf["fate"].value_counts().items()) +
               f" | pre_existing {int(bdf['pre_existing'].sum()):,} "
               f"polls {btc.n_poll:,} failed {btc.n_failed}", flush=True)
+        # Fee coverage is the number a buyer conditions on, so it is reported every run rather
+        # than left to be rediscovered from the parquet.
+        _obs = bdf[~bdf["pre_existing"].astype(bool)]
+        _cov = _obs["fee_rate_sat_vb"].notna().mean() if len(_obs) else float("nan")
+        _drp = bdf[bdf["fate"] == "dropped"]
+        _dcov = _drp["fee_rate_sat_vb"].notna().mean() if len(_drp) else float("nan")
+        print(f"      fee coverage: arrivals {_cov:.1%} | dropped {_dcov:.1%} "
+              f"| pre-existing sampler ok {btc.n_pre_fee_ok:,} miss {btc.n_pre_fee_miss:,}",
+              flush=True)
     write(e8_btc_mempool.DATASET, bdf, run_id)
     if btc_div_rows:
         write(e8_btc_mempool.DIVERGENCE_DATASET,
