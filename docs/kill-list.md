@@ -8,7 +8,7 @@ Every candidate dataset checked against the scarcity criterion, and why it faile
 
 Kept because it is the most reusable thing this project has produced. The recurring shape:
 **if a dataset is valuable and accessible, a vendor has already built it.** What survives sits
-where the buyer base is real but unformed. Hit rate to date: **8 built of 25 checked.**
+where the buyer base is real but unformed. Hit rate to date: **8 built of 26 checked.**
 
 The discipline, in order, and it is not negotiable — three of the four surviving datasets were
 found this way, and the one that was not had to be withdrawn:
@@ -47,6 +47,7 @@ found this way, and the one that was not had to be withdrawn:
 | 23 | **MEV-Boost relay bids** (incl. losing bids) | Flashbots' own **relayscan.io Bid Archive** publishes all of it, monthly, back to 2024 |
 | 24 | **Stratum mining-pool job data** | **UNBLOCKED and BUILT** via a third-party public feed; see below |
 | 25 | **Rescue archiving** (buy/keep data before it disappears) | structurally unsellable -- see below |
+| 26 | **EIP-4844 blob sidecars** | blobscan indexes blobs from the **2024-03-13 Dencun activation** with the payloads stored; fully backfillable |
 
 ## 17 — npm / PyPI yanked releases (killed 2026-08-27)
 
