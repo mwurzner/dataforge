@@ -42,7 +42,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
-                           e17_perpdepth)
+                           e17_perpdepth, e18_attpool)
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -152,6 +152,24 @@ def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list,
         stop.wait(every or RPC_MEMPOOL_EVERY_S)
 
 
+def _attpool_sampler(attp, stop: "threading.Event", failures: list) -> None:
+    """Poll the beacon attestation pool on the slot clock (12s).
+
+    Own thread for the same reason as every other sampler here: the pool turns over within
+    ~10 minutes, so a cadence gated by the main loop's sleep would miss most of it. Touches only
+    its own tracker, which nothing else reads until the run ends.
+    """
+    while not stop.is_set():
+        try:
+            attp.poll_pool()
+            attp.poll_blocks()
+            attp.finalise()
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e18: {exc}")
+        stop.wait(12.0)
+
+
 def _pre_fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
     """Walk the opening mempool snapshot, capturing fees before those transactions can be evicted.
 
@@ -240,6 +258,7 @@ def main() -> int:
     # Litecoin rides the identical Esplora API (probed: litecoinspace.org answers the same
     # endpoints). Tiny pool (~10 KB a poll), no second provider, so no cross-check and no
     # divergence sampling; the frame records that honestly rather than faking a weaker claim.
+    attp = e18_attpool.AttestationPoolTracker()
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
     preconf = e14_preconf.make_watchers()
@@ -264,6 +283,7 @@ def main() -> int:
     node_fee_thread = None
     node_fast_thread = None
     ltc_node_thread = None
+    attp_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -281,6 +301,9 @@ def main() -> int:
         args=(btc, fee_stop, failures, e8_btc_mempool.NODE_DEEP, RPC_MEMPOOL_EVERY_S, "deep"),
         name="node-fee-deep", daemon=True)
     node_fee_thread.start()
+    attp_thread = threading.Thread(target=_attpool_sampler, args=(attp, fee_stop, failures),
+                                   name="attestation-pool", daemon=True)
+    attp_thread.start()
     ltc_node_thread = threading.Thread(
         target=_node_fee_snapshotter,
         args=(ltc, fee_stop, failures, e8_btc_mempool.LTC_NODES, RPC_MEMPOOL_EVERY_S, "ltc"),
@@ -408,6 +431,8 @@ def main() -> int:
         node_fast_thread.join(timeout=15)
     if ltc_node_thread is not None:
         ltc_node_thread.join(timeout=15)
+    if attp_thread is not None:
+        attp_thread.join(timeout=15)
 
     if quote_future is not None:
         try:
@@ -558,6 +583,20 @@ def main() -> int:
               f"{okr['corridor'].nunique()} corridors, {rdf['error'].notna().sum()} errors",
               flush=True)
         write(e13_remit.DATASET, rdf, run_id)
+
+    attp.finalise(force=True)
+    adf = attp.frame()
+    if len(adf):
+        # Report ONLY over slots whose inclusion window closed. Including the rest makes the
+        # net figure meaningless -- a slot finalised early shows every attester as missing.
+        cl = adf[adf.window_closed]
+        net = int(cl.attesters_net_never_included.sum()) if len(cl) else 0
+        print(f"  E18: {len(adf):,} slots ({len(cl):,} window-closed) | "
+              f"seen {int(cl.attesters_seen_in_pool.sum()) if len(cl) else 0:,} "
+              f"included {int(cl.attesters_included.sum()) if len(cl) else 0:,} net {net:+,} "
+              f"| polls {attp.n_polls} blocks {len(attp.blocks_read)} "
+              f"missed-slots {attp.n_missed_slots} fetch-fail {attp.n_block_fail}", flush=True)
+        write(e18_attpool.DATASET, adf, run_id)
 
     if depth_rows:
         ddf = pd.concat(depth_rows, ignore_index=True)
