@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
-OWNER = os.environ.get("HF_OWNER", "SleeveZipper")
+OWNER = os.environ.get("HF_OWNER", "dataforge-labs")
 ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, never browsed
 # THE PUBLIC SAMPLE IS FROZEN, NOT ROLLING, and that distinction is the business model.
 #
@@ -95,7 +95,7 @@ afterwards, and nothing here is interpolated.
 
 ## License and contact
 
-ODC-BY: use it freely, credit "DataForge (SleeveZipper)". Questions and requests for the full
+ODC-BY: use it freely, credit "DataForge (dataforge-labs)". Questions and requests for the full
 history via the discussions tab.
 """
 
