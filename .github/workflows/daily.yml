@@ -79,7 +79,7 @@ jobs:
         if: always()
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_OWNER: SleeveZipper
+          HF_OWNER: dataforge-labs
         run: python -m src.ops.hf_push
 
       - name: Gap check
