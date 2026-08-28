@@ -65,6 +65,10 @@ CHECKPOINT_EVERY_S = float(os.environ.get("DF_CHECKPOINT_EVERY_S", 1800))
 # Seconds between pre-existing fee lookups. 2.0 gives ~0.5 req/s, about 8,000 transactions over a
 # 4.5h run, roughly 10% of a typical 82,000-transaction opening snapshot. Raise it to back off.
 PRE_FEE_EVERY_S = float(os.environ.get("DF_PRE_FEE_EVERY_S", 2.0))
+# Full-mempool RPC snapshot. One call supplies ~34% of the tracked set's fees against ~9% from a
+# whole run of per-transaction sampling, so this is the dominant source. 15 minutes keeps the wire
+# cost near 83 MB per run (4.6 MB gzipped per call) against a free public node.
+RPC_MEMPOOL_EVERY_S = float(os.environ.get("DF_RPC_MEMPOOL_EVERY_S", 900))
 # E1 STORAGE MODE. "aggregate" (default) stores a per-minute summary plus full rows for the
 # never-mined transactions, instead of a row per transaction. E1 is 85% of everything this
 # project stores AND is the one dataset established as NOT scarce -- Flashbots publishes the same
@@ -115,6 +119,22 @@ def _fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
             if len(failures) < 200:
                 failures.append(f"e8 recent: {exc}")
         stop.wait(2.0)
+
+
+def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list) -> None:
+    """Take a full-mempool fee snapshot from a public Bitcoin node, periodically.
+
+    Own thread because the call is ~2s and multi-megabyte, and the main loop must not wait on it.
+    Same thread-safety argument as the other samplers: writes only `self.fees` and its own
+    counters, never `seen`, `mined` or `pool`.
+    """
+    while not stop.is_set():
+        try:
+            btc.snapshot_node_fees()
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e8 node snapshot: {exc}")
+        stop.wait(RPC_MEMPOOL_EVERY_S)
 
 
 def _pre_fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
@@ -226,6 +246,7 @@ def main() -> int:
     fee_stop = threading.Event()
     fee_thread = None
     pre_fee_thread = None
+    node_fee_thread = None
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
@@ -238,6 +259,10 @@ def main() -> int:
     pre_fee_thread = threading.Thread(target=_pre_fee_sampler, args=(btc, fee_stop, failures),
                                       name="pre-fee-sampler", daemon=True)
     pre_fee_thread.start()
+    node_fee_thread = threading.Thread(target=_node_fee_snapshotter,
+                                       args=(btc, fee_stop, failures),
+                                       name="node-fee-snapshot", daemon=True)
+    node_fee_thread.start()
 
     try:
         while time.time() - t0 < DURATION_S:
@@ -349,6 +374,8 @@ def main() -> int:
         fee_thread.join(timeout=10)
     if pre_fee_thread is not None:
         pre_fee_thread.join(timeout=10)
+    if node_fee_thread is not None:
+        node_fee_thread.join(timeout=15)
 
     if quote_future is not None:
         try:
@@ -431,10 +458,15 @@ def main() -> int:
         # than left to be rediscovered from the parquet.
         _obs = bdf[~bdf["pre_existing"].astype(bool)]
         _cov = _obs["fee_rate_sat_vb"].notna().mean() if len(_obs) else float("nan")
+        _pre = bdf[bdf["pre_existing"].astype(bool)]
+        _pcov = _pre["fee_rate_sat_vb"].notna().mean() if len(_pre) else float("nan")
         _drp = bdf[bdf["fate"] == "dropped"]
         _dcov = _drp["fee_rate_sat_vb"].notna().mean() if len(_drp) else float("nan")
-        print(f"      fee coverage: arrivals {_cov:.1%} | dropped {_dcov:.1%} "
-              f"| pre-existing sampler ok {btc.n_pre_fee_ok:,} miss {btc.n_pre_fee_miss:,}",
+        # pre-existing coverage is the one that matters for DROP rows: every dropped
+        # transaction observed so far was already pending when its run began.
+        print(f"      fee coverage: arrivals {_cov:.1%} | pre-existing {_pcov:.1%} "
+              f"| dropped {_dcov:.1%} "
+              f"| sampler ok {btc.n_pre_fee_ok:,} miss {btc.n_pre_fee_miss:,} | node snapshots {btc.n_node_snapshots} gave {btc.n_node_fees:,}",
               flush=True)
     write(e8_btc_mempool.DATASET, bdf, run_id)
     if btc_div_rows:
