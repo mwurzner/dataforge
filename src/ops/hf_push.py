@@ -132,6 +132,25 @@ ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
                 # Behaviour here is deliberate; see the private design notes.
                 "e19_stratum_jobs"}
 
+# TERMS REGISTER, checked 2026-08-29 for every source whose OWN data we publish. Read this
+# before adding a product: the gate is the source's terms, not whether the endpoint answers.
+#
+#   FORBIDS COLLECTION      paradex   removed from e17 and redacted below
+#   REQUIRES A DATA LICENCE derive    never built; its terms cover quotes, marks and books
+#   THIRD-PARTY COMPILATION stratum.work  archive-only, see ARCHIVE_ONLY
+#   NO TERMS PUBLISHED      aevo      no ToS on site, app or docs; robots allows all; no key
+#   NO RESTRICTION FOUND    wise      public unauthenticated comparison endpoint, ToS silent
+#   NO BLANKET DISALLOW     the fee estimators, quote aggregators and on-ramps in e10/e12/e15
+#
+# RPC endpoints are deliberately NOT in this register. Reading Bitcoin through a provider yields
+# the CHAIN's facts, which are nobody's compilation; the provider's terms govern our use of their
+# service, not our right to the ledger. That distinction is why e8 is publishable and e17's
+# Paradex half was not.
+#
+# NOT EXHAUSTIVE, and worth saying so: this prioritised by exposure rather than reading all 31
+# hosts end to end. A source added later without its own check is exactly how the Paradex rows
+# reached a public repo.
+
 # Rows withheld because the source's terms forbid automated COLLECTION, not merely resale, so
 # there is no archive-only compromise of the kind e19 gets. Applied at stage time and to
 # HISTORICAL partitions, which is what makes it retroactive: a public repo mirrors its window,
