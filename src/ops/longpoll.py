@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
                            e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct,
-                           e22_options_surface,
+                           e22_options_surface, e23_perp_mark,
                            e21_btc_p2p)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -243,16 +243,16 @@ def _quote_round():
     # Books cost one request each, so they run here on the worker thread rather than inline:
     # about 25s for the ladder, which must not stall the 2s Bitcoin fee sampling.
     return (q, r, e12_onramp.sample(), e13_remit.sample(), e17_perpdepth.sample(),
-            surf, e22_options_surface.books(surf))
+            surf, e22_options_surface.books(surf), e23_perp_mark.sample())
 
 
 def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_rows,
-                    surf_rows, book_rows, failures):
+                    surf_rows, book_rows, mark_rows, failures):
     """Drain a finished quote round. Returns True if the future was consumed."""
     if fut is None or not fut.done():
         return False
     try:
-        _q, _r, _o, _rm, _d, _s, _b = fut.result()
+        _q, _r, _o, _rm, _d, _s, _b, _mk = fut.result()
         quote_rows.append(_q)
         if len(_r):
             route_rows.append(_r)
@@ -261,6 +261,7 @@ def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_
         depth_rows.append(_d)
         surf_rows.append(_s)
         book_rows.append(_b)
+        mark_rows.append(_mk)
     except Exception as exc:
         failures.append(f"quote round: {exc}")
     return True
@@ -317,6 +318,7 @@ def main() -> int:
     depth_rows: list[pd.DataFrame] = []
     surf_rows: list[pd.DataFrame] = []
     book_rows: list[pd.DataFrame] = []
+    mark_rows: list[pd.DataFrame] = []
     quote_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='quotes')
     quote_future = None
     fee_stop = threading.Event()
@@ -455,7 +457,8 @@ def main() -> int:
             # Non-blocking: collect a finished round, then start the next one. The main loop
             # must never wait on these -- see _quote_round.
             if _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
-                               remit_rows, depth_rows, surf_rows, book_rows, failures):
+                               remit_rows, depth_rows, surf_rows, book_rows, mark_rows,
+                               failures):
                 quote_future = None
             if quote_future is None and now - last_quote >= QUOTE_EVERY_S:
                 quote_future = quote_pool.submit(_quote_round)
@@ -501,7 +504,7 @@ def main() -> int:
         except Exception as exc:
             failures.append(f"quote round (final): {exc}")
         _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
-                        remit_rows, depth_rows, surf_rows, book_rows, failures)
+                        remit_rows, depth_rows, surf_rows, book_rows, mark_rows, failures)
     quote_pool.shutdown(wait=False)
 
     # Final catch-up and reconciliation. Anything seen, never mined, and absent from the pool is
@@ -744,6 +747,14 @@ def main() -> int:
               f"{oks.asset.nunique() if len(oks) else 0} assets and "
               f"{oks.expiry.nunique() if len(oks) else 0} expiries", flush=True)
         write(e22_options_surface.DATASET, sdf, run_id)
+
+    if mark_rows:
+        mdf = pd.concat(mark_rows, ignore_index=True)
+        okm = mdf[mdf.error.isna()]
+        rwa = int(okm.is_rwa.astype(bool).sum()) if len(okm) else 0
+        print(f"  E23: {len(mdf):,} perp marks, {rwa:,} real-world-asset rows across "
+              f"{okm.market_type.nunique() if len(okm) else 0} market types", flush=True)
+        write(e23_perp_mark.DATASET, mdf, run_id)
 
     if book_rows:
         bdf2 = pd.concat(book_rows, ignore_index=True)
