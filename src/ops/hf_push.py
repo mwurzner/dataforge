@@ -14,6 +14,7 @@ So the split is by AUDIENCE, not by dataset count:
     bitcoin-mining-pool-templates   what pools are building on, and how blocks propagate
     ethereum-attestation-pool       attestations seen waiting against attestations included
     crypto-options-surface          every listed strike, priced, with its greeks
+    equity-perp-price-discovery     what an equity price does when its cash market is shut
 
 A product is added when a collector has an audience the existing repos do not reach, not when
 it produces a new table. PRODUCTS below is the authority; this list is a summary of it.
@@ -124,7 +125,7 @@ WINDOWED = {
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
-    "e21_btc_tx_propagation",
+    "e21_btc_tx_propagation", "e23_perp_mark_index",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -313,6 +314,61 @@ PRODUCTS = {
                  "validator", "blockchain", "time-series"],
         "size": "10K<n<100K",
         "body": ATTESTATION_CARD,
+    },
+    "equity-perp-price-discovery": {
+        "datasets": ["e23_perp_mark_index", MANIFEST],
+        "example": "e23_perp_mark_index",
+        "pretty": "Round-the-clock perpetual prices for equities and pre-IPO names",
+        "tags": ["equities", "perpetual-futures", "price-discovery", "after-hours",
+                 "pre-ipo", "basis", "finance", "time-series", "cryptocurrency"],
+        "size": "1M<n<10M",
+        "body": """# Equity and pre-IPO perpetual price discovery
+
+What a price for Apple, Nvidia, OpenAI or Anthropic does when no cash market is open.
+
+Perpetual futures on real-world assets trade around the clock, including the roughly 60% of the
+week when US equities are shut. The venue publishes an index history but no mark history, so the
+price it actually margins against, and the gap between that and the index, exist only if they
+were recorded as they happened.
+
+Two of these names have no public market at any hour.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e23_perp_mark_index` | one instrument at one moment: mark, index, and the basis between them |
+
+## Reading it
+
+`market_type` separates the population: equity, etf, commodity, fx, pre_ipo, and crypto.
+`is_rwa` marks the real-world-asset subset in one flag.
+
+`basis_bps` is (mark - index) / index in basis points, signed, and null rather than zero where
+either leg is missing. Basis points make an instrument priced at 38 comparable to one priced at
+78,000.
+
+**The crypto rows are the control, and they are included for that reason.** Crypto perpetuals
+have no closed hours, so they show what this basis looks like when the underlying never stops.
+Compare an equity against them rather than against zero.
+
+The interesting window is when the cash market is shut. One Saturday sample had the whole
+equity book live, with marks moving while their indices barely did.
+
+## Before you build on this
+
+- The mark is the venue's own, used for margining. It is not necessarily a traded price, and
+  `e17_perp_depth` is where a few of these instruments' actual books are.
+- How the index is derived for an equity while its cash market is closed is the venue's
+  business and is not modelled here. It was observed to move slightly even on a Saturday, so
+  treat it as the venue's reference rather than a last cash close.
+- `pre_ipo` names have no public reference market at all, at any hour. Their basis is measured
+  against a construction of the venue's own, so read it as internal consistency, not as a
+  premium to a market price.
+- One venue. This is where one book put the price, not a consensus.
+- Instruments are listed and delisted over time, so count distinct `instrument_name` per day
+  rather than assuming a fixed universe.
+""",
     },
     "crypto-options-surface": {
         "datasets": ["e22_options_surface", "e22_options_book", MANIFEST],
