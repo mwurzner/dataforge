@@ -669,6 +669,15 @@ def main() -> int:
 
     # Written once, outside both branches above: relay floors arrive on handshake and do not
     # depend on a block having been seen during the window.
+    tdf = p2p.tx_frame()
+    if len(tdf):
+        g = tdf.groupby("txid").peer_addr.nunique()
+        multi = int((g > 1).sum())
+        print(f"  E21 tx: {len(tdf):,} announcements for {len(g):,} sampled txs "
+              f"({multi:,} seen by >1 peer) | {p2p.n_tx_inv:,} inv total, capped {p2p.n_tx_capped}",
+              flush=True)
+        write(e21_btc_p2p.TX_DATASET, tdf, run_id)
+
     fdf = p2p.floor_frame()
     if len(fdf):
         print(f"  E21 floors: {len(fdf):,} feefilter messages from {fdf.peer_addr.nunique()} "

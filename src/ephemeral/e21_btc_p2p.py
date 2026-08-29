@@ -4,7 +4,8 @@ One row per (block, peer): when that peer announced that block to us. A second t
 per-peer connection state.
 
 Operational notes:
-  fRelay is 0, so peers do not send transaction announcements.
+  fRelay is 1: peers announce transactions, which TX_DATASET samples by txid. getdata is never
+  sent, so no transaction body is ever fetched, only announcement timing.
   Dialling is bounded per pass. An unbounded loop starves the poll that collects data.
   run() closes its connections on return, so call it once for the whole window with a stop
   event rather than repeatedly with a short duration.
@@ -26,12 +27,22 @@ import pandas as pd
 DATASET = "e21_btc_block_propagation"
 PEER_DATASET = "e21_btc_p2p_peers"
 FLOOR_DATASET = "e21_btc_relay_floor"
+TX_DATASET = "e21_btc_tx_propagation"
+
+# Transaction announcements arrive in the thousands per second across ~120 peers, so they are
+# SAMPLED by txid rather than captured whole: a txid is tracked when its first byte-pair is
+# below TX_SAMPLE_CUT, i.e. one in 64. The filter is a property of the hash, so it is uniform,
+# stateless, and identical on every peer -- which is what makes a propagation curve comparable
+# across peers rather than an artifact of when we started watching.
+TX_SAMPLE_CUT = 4          # of 256
+TX_ROW_CAP = 400_000       # hard stop; a run that hits it is reported, never silently trimmed
 
 MAGIC = bytes.fromhex("f9beb4d9")          # mainnet
 PROTOCOL_VERSION = 70016
 USER_AGENT = b"/dataforge-observer:1.0/"   # honest, and identifiable to any operator who looks
 MSG_TX, MSG_BLOCK = 1, 2
 MSG_WITNESS_BLOCK = 0x40000002
+MSG_WITNESS_TX = 0x40000001
 BITNODES = "https://bitnodes.io/api/v1/snapshots/latest/"
 
 # Dialling is sequential and blocking, so it is bounded per pass: unreachable peers are common
@@ -55,11 +66,16 @@ def _varstr(b: bytes) -> bytes:
 
 
 def _version_payload() -> bytes:
-    # fRelay = 0 at the end: ask peers NOT to announce transactions. See module docstring.
+    # fRelay = 1 at the end: ask peers TO announce transactions. It was 0 while this collector
+    # measured only blocks. Announcements are the point of TX_DATASET and are not sent to a peer
+    # that declined relay.
+    #
+    # getdata is still never sent, so no transaction BODY is requested -- only the inv, which is
+    # the timing. Bandwidth is bounded by that: an inv entry is 36 bytes.
     return (struct.pack("<iQq", PROTOCOL_VERSION, 0, int(time.time()))
             + b"\x00" * 26 + b"\x00" * 26
             + struct.pack("<Q", random.getrandbits(64))
-            + _varstr(USER_AGENT) + struct.pack("<i", 0) + b"\x00")
+            + _varstr(USER_AGENT) + struct.pack("<i", 0) + b"\x01")
 
 
 def _read_varint(b: bytes, i: int):
@@ -105,6 +121,10 @@ class BlockPropagationCollector:
         self.state: dict[tuple, dict] = {}
         self.rows: list[dict] = []
         self.floor_rows: list[dict] = []
+        self.tx_rows: list[dict] = []
+        self.tx_seen: set = set()
+        self.n_tx_inv = 0
+        self.n_tx_capped = 0
         self.seen: set[tuple] = set()
         self.n_handshakes = 0
         self.n_connect_fail = 0
@@ -231,6 +251,27 @@ class BlockPropagationCollector:
                 typ = struct.unpack_from("<I", payload, i)[0]
                 h = payload[i + 4:i + 36][::-1].hex()      # little-endian on the wire
                 i += 36
+                if typ in (MSG_TX, MSG_WITNESS_TX):
+                    self.n_tx_inv += 1
+                    # Sampled on the hash itself, so every peer's view of the same transaction is
+                    # either all in or all out. We never send getdata for these: the body is on
+                    # chain once mined and is not what this measures -- the TIMING is.
+                    if int(h[:2], 16) >= TX_SAMPLE_CUT:
+                        continue
+                    k = (h, key)
+                    if k in self.tx_seen:
+                        continue
+                    if len(self.tx_rows) >= TX_ROW_CAP:
+                        self.n_tx_capped += 1
+                        continue
+                    self.tx_seen.add(k)
+                    self.tx_rows.append({
+                        "received_ts": now,
+                        "txid": h,
+                        "peer_addr": f"{key[0]}:{key[1]}",
+                        "peer_user_agent": st.get("user_agent"),
+                    })
+                    continue
                 if typ in (MSG_BLOCK, MSG_WITNESS_BLOCK):
                     st["n_block_inv"] += 1
                     k = (h, key)
@@ -322,6 +363,17 @@ class BlockPropagationCollector:
 
     def frame(self) -> pd.DataFrame:
         return pd.DataFrame(self.rows)
+
+    def tx_frame(self) -> pd.DataFrame:
+        """One row per (sampled transaction, peer): when that peer announced it to us."""
+        df = pd.DataFrame(self.tx_rows)
+        if len(df):
+            # Delay from the FIRST peer to announce it, which is the only reference available
+            # without a trusted clock: we cannot know when it was broadcast, only when the
+            # earliest peer we hold told us.
+            first = df.groupby("txid").received_ts.transform("min")
+            df["delay_from_first_s"] = (df.received_ts - first).round(4)
+        return df
 
     def floor_frame(self) -> pd.DataFrame:
         """One row per feefilter received. A peer appears repeatedly as its floor moves."""

@@ -124,6 +124,7 @@ WINDOWED = {
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
+    "e21_btc_tx_propagation",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -387,7 +388,8 @@ A one-sided book is a real state and is recorded as one, with the missing side n
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
                      "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
                      "e1_mempool_minutely", "e1_mempool_dropped", "e1_mempool_lifecycle",
-                     "e3_mempool_divergence", "e21_btc_relay_floor", MANIFEST],
+                     "e3_mempool_divergence", "e21_btc_relay_floor",
+                     "e21_btc_tx_propagation", MANIFEST],
         "example": "e8_btc_mempool_lifecycle",
         "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
         "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
@@ -414,6 +416,7 @@ leaves no record at all. Both are recorded here as they happen.
 | `e1_mempool_dropped` | an Ethereum transaction that was never mined |
 | `e3_mempool_divergence` | Ethereum pending-set comparison across views |
 | `e21_btc_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
+| `e21_btc_tx_propagation` | one peer announcing one transaction, timestamped |
 
 `e1_mempool_lifecycle` stops at 2026-08-26. Per-transaction Ethereum rows were discontinued
 there: the Flashbots Mempool Dumpster publishes the same measurement under CC-0 from a wider
@@ -477,6 +480,26 @@ a child shows up. The descendant columns are the mirror: what is waiting on this
 These come from a full node's own view, so they are null for transactions it never held, and
 they are recorded as first observed. Package structure changes as parents confirm, so treat
 them as the state at first sight rather than a running value.
+
+## How fast a transaction spreads
+
+`e21_btc_tx_propagation` timestamps each peer's announcement of a sampled transaction, from
+connections held to roughly 120 peers. Sorting one txid's rows by `received_ts` gives its
+propagation curve, and `delay_from_first_s` is measured against the earliest peer we heard it
+from, which is the only reference available: broadcast time is not observable.
+
+Expect this to be far slower than block propagation, and that is the network working as
+designed rather than a measurement problem. Nodes randomise announcement timing to make it hard
+to trace where a transaction entered the network, so an early observation ran to a median of
+about 23 seconds between the first and last peer against roughly 0.4 seconds for a block.
+
+Transactions are SAMPLED, not captured whole: a txid is tracked when its leading byte-pair falls
+below a fixed cut, taking about one in sixty-four. The test is a property of the hash, so it is
+the same on every peer and a curve is never truncated by when we started watching. Announcement
+volume is otherwise thousands per second.
+
+Only the announcement is collected. The transaction body is never requested, and it is on chain
+anyway once mined; the timing is the part that is not.
 
 ## Relay floors
 
