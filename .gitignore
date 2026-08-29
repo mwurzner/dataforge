@@ -24,3 +24,6 @@ data/*
 # being sold. Products are built fresh by src/ops/publish.py and uploaded to the storefront;
 # they are never version-controlled here.
 dist/
+
+# Stale-window sentinel: written by hf_push inside Actions, consumed by the workflow.
+.repin_needed
