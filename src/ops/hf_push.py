@@ -123,7 +123,7 @@ WINDOWED = {
     "e16_dex_routes", "e17_perp_depth",
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
-    "e22_options_surface", "e21_btc_relay_floor",
+    "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -282,7 +282,7 @@ PRODUCTS = {
         "body": ATTESTATION_CARD,
     },
     "crypto-options-surface": {
-        "datasets": ["e22_options_surface", MANIFEST],
+        "datasets": ["e22_options_surface", "e22_options_book", MANIFEST],
         "example": "e22_options_surface",
         "pretty": "Implied volatility surface for on-chain crypto options",
         "tags": ["options", "implied-volatility", "derivatives", "greeks", "cryptocurrency",
@@ -301,6 +301,7 @@ record, and most of these strikes never trade.
 | name | one row is |
 |---|---|
 | `e22_options_surface` | one instrument at one moment: strike, expiry, mark, forward, and the full greek set |
+| `e22_options_book` | top of book for a near-the-money ladder: bid, ask, their sizes, and both quoted in vol terms |
 
 ## Reading it
 
@@ -316,6 +317,22 @@ group on when comparing across assets at a moment.
 
 `strike` and `expiry` are parsed from the instrument name, and both are null where the name
 does not match the expected shape rather than being guessed. `expiry_ts` comes from the venue.
+
+## What the mark costs you
+
+The surface carries the venue's mark. `e22_options_book` carries what was actually quoted:
+`best_bid_iv` and `best_ask_iv` give the two sides in vol terms and `iv_spread` the distance
+between them. Across one ladder that distance ran from 4.2 to 18.6 vol points, and the mark sat
+inside the band every time, near the middle rather than at it.
+
+The ladder is deliberate rather than exhaustive, because a book costs one request per
+instrument. It takes the strikes nearest the forward across several expiries and skips the
+expiring contract, which was measured to have no book at all. So `e22_options_book` covers a
+slice of `e22_options_surface` and never all of it; the two join on `instrument_name` within a
+round.
+
+A one-sided book is a real state and is recorded as one, with the missing side null while
+`error` stays empty. `error` is set only where the request itself failed.
 
 ## Before you build on this
 

@@ -19,13 +19,25 @@ import urllib.request
 import pandas as pd
 
 DATASET = "e22_options_surface"
+BOOK_DATASET = "e22_options_book"
 HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json"}
 
 VENUE = "aevo"
 BASE = "https://api.aevo.xyz/markets?instrument_type=OPTION&asset="
+BOOK = "https://api.aevo.xyz/orderbook?instrument_name="
 ASSETS = ("ETH", "BTC", "SOL")
 
 GREEKS = ("iv", "delta", "gamma", "vega", "theta", "rho")
+
+# The book costs one request per instrument, so it is sampled on a LADDER rather than the whole
+# chain. Measured when choosing the shape: the nearest expiry has no book at all -- market makers
+# have pulled quotes by then -- while every later one quotes, and the bid-ask in vol points runs
+# from about 0.62 at one day to 0.045 at nineteen. Tenor therefore buys more than strike depth
+# does, so the ladder is wide in expiry and shallow in strike.
+BOOK_ASSETS = ("ETH", "BTC")
+BOOK_SKIP_FRONT = 1       # the expiring contract, measured empty
+BOOK_EXPIRIES = 3
+BOOK_STRIKES = 2          # nearest the forward, each side quoted as both put and call
 
 
 def _get(url: str, timeout: int = 30):
@@ -78,7 +90,8 @@ def sample() -> pd.DataFrame:
                 "instrument_name": name,
                 "expiry": expiry,
                 "expiry_ts": _f(m.get("expiry")),
-                "strike": strike,
+                # Venue field first, parsed name as fallback, so a naming change cannot empty it.
+                "strike": (_f(m.get("strike")) if m.get("strike") is not None else strike),
                 # Prefer the venue's own field and fall back to the parsed name, so a change in
                 # naming does not silently empty the column.
                 "option_type": (m.get("option_type") or kind),
@@ -92,6 +105,55 @@ def sample() -> pd.DataFrame:
             for k in GREEKS:
                 row[k] = _f(g.get(k))
             rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _ladder(surface: pd.DataFrame) -> list[str]:
+    """Instruments to pull books for: near the forward, across expiries, skipping the front."""
+    out: list[str] = []
+    live = surface[surface.error.isna() & surface.expiry_ts.notna() & surface.strike.notna()]
+    for asset in BOOK_ASSETS:
+        a = live[live.asset == asset]
+        if a.empty:
+            continue
+        exps = sorted(a.expiry_ts.unique())[BOOK_SKIP_FRONT:BOOK_SKIP_FRONT + BOOK_EXPIRIES]
+        for e in exps:
+            grp = a[a.expiry_ts == e]
+            fwd = grp.forward_price.dropna()
+            if fwd.empty:
+                continue
+            f = float(fwd.iloc[0])
+            near = sorted(grp.strike.unique(), key=lambda k: abs(k - f))[:BOOK_STRIKES]
+            out.extend(grp[grp.strike.isin(near)].instrument_name.tolist())
+    return out
+
+
+def books(surface: pd.DataFrame) -> pd.DataFrame:
+    """Top of book for the ladder. One row per instrument, with the quote in vol terms."""
+    rows: list[dict] = []
+    for name in _ladder(surface):
+        t0 = time.time()
+        ob, err = _get(BOOK + name)
+        ts = time.time()
+        row = {"sampled_ts": ts, "venue": VENUE, "instrument_name": name,
+               "latency_s": round(ts - t0, 3), "error": err,
+               "best_bid": None, "best_bid_size": None, "best_bid_iv": None,
+               "best_ask": None, "best_ask_size": None, "best_ask_iv": None,
+               "iv_spread": None, "bid_levels": 0, "ask_levels": 0}
+        if not err and isinstance(ob, dict):
+            bids, asks = ob.get("bids") or [], ob.get("asks") or []
+            row["bid_levels"], row["ask_levels"] = len(bids), len(asks)
+            # Levels are [price, size, iv] as strings. A one-sided book is a real state, not a
+            # failure, so it leaves the missing side null and `error` stays None.
+            if bids:
+                row["best_bid"], row["best_bid_size"] = _f(bids[0][0]), _f(bids[0][1])
+                row["best_bid_iv"] = _f(bids[0][2]) if len(bids[0]) > 2 else None
+            if asks:
+                row["best_ask"], row["best_ask_size"] = _f(asks[0][0]), _f(asks[0][1])
+                row["best_ask_iv"] = _f(asks[0][2]) if len(asks[0]) > 2 else None
+            if row["best_bid_iv"] is not None and row["best_ask_iv"] is not None:
+                row["iv_spread"] = round(row["best_ask_iv"] - row["best_bid_iv"], 6)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
