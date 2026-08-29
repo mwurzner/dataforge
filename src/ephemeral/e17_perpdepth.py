@@ -27,14 +27,13 @@ VENUES = [
     ("aevo", "BTC-PERP", "https://api.aevo.xyz/orderbook?instrument_name=BTC-PERP"),
     ("aevo", "SOL-PERP", "https://api.aevo.xyz/orderbook?instrument_name=SOL-PERP"),
     ("aevo", "AAPL-PERP", "https://api.aevo.xyz/orderbook?instrument_name=AAPL-PERP"),
-    ("paradex", "BTC-USD-PERP",
-     "https://api.prod.paradex.trade/v1/orderbook/BTC-USD-PERP?depth=50"),
-    ("paradex", "ETH-USD-PERP",
-     "https://api.prod.paradex.trade/v1/orderbook/ETH-USD-PERP?depth=50"),
-    ("paradex", "SOL-USD-PERP",
-     "https://api.prod.paradex.trade/v1/orderbook/SOL-USD-PERP?depth=50"),
-    ("paradex", "HYPE-USD-PERP",
-     "https://api.prod.paradex.trade/v1/orderbook/HYPE-USD-PERP?depth=50"),
+    # PARADEX REMOVED 2026-08-29 ON ITS TERMS OF SERVICE, which read:
+    #   "You further agree not to engage in data mining, robots, scraping, or similar data
+    #    gathering or extraction methods of content or information from the Services."
+    # That forbids the COLLECTION, not merely redistribution, so there is no archive-only
+    # compromise available the way there is for a source that only restricts resale. Four
+    # Paradex books were collected here every 15 minutes and published, which should not have
+    # happened; hf_push redacts the historical rows from the public window on the next push.
 ]
 
 
