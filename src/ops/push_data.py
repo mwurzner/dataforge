@@ -44,6 +44,18 @@ def _git(*args, check=True, cwd=None):
 
 
 def _changed_files() -> list[str]:
+    """Every changed FILE, with untracked directories expanded.
+
+    THE BUG THIS FIXES, which cost a real collection window. `git status --porcelain` reports a
+    brand-new dataset as an untracked DIRECTORY -- `?? e21_btc_block_propagation/` -- not as its
+    individual files. The restore loop below only copies entries where `is_file()` is true, so on
+    a rejected push the reset wiped the new directory and nothing put it back. E21 wrote 946 rows
+    on the runner, the push was rejected, it retried, and the dataset simply was not there
+    afterwards. Datasets that already existed survived because their paths were listed per file.
+
+    Nothing errored. The run reported success and pushed 220 partitions; one dataset was just
+    missing from all of them.
+    """
     r = _git("status", "--porcelain")
     out = []
     for line in r.stdout.splitlines():
@@ -53,7 +65,13 @@ def _changed_files() -> list[str]:
         # Renames appear as "old -> new"; only the new side is ours to carry.
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
-        out.append(path)
+        full = DATA / path
+        if full.is_dir():
+            for f in sorted(full.rglob("*")):
+                if f.is_file():
+                    out.append(str(f.relative_to(DATA)).replace("\\", "/"))
+        else:
+            out.append(path)
     return out
 
 
