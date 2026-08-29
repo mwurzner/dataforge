@@ -1,4 +1,4 @@
-"""Publish the panels to HuggingFace: three public products, one private archive.
+"""Publish the panels to HuggingFace: public products by audience, one private archive.
 
 WHY THREE REPOS AND NOT ONE. Everything used to land in a single repo called `dataforge-sample`,
 which by the end held 18 unrelated datasets. No name could describe it, because a Bitcoin mempool
@@ -8,9 +8,15 @@ past lending-market parquet to reach it. The naming problem was a packaging prob
 
 So the split is by AUDIENCE, not by dataset count:
 
-    bitcoin-mempool-lifecycle   what happens to transactions before they confirm
-    crypto-execution-costs      what it costs to move money, quoted and compared
-    remittance-pricing-panel    what banks and money transmitters charge, corridor by corridor
+    bitcoin-mempool-lifecycle       what happens to transactions before they confirm
+    crypto-execution-costs          what it costs to move money, quoted and compared
+    remittance-pricing-panel        what banks and money transmitters charge, corridor by corridor
+    bitcoin-mining-pool-templates   what pools are building on, and how blocks propagate
+    ethereum-attestation-pool       attestations seen waiting against attestations included
+    crypto-options-surface          every listed strike, priced, with its greeks
+
+A product is added when a collector has an audience the existing repos do not reach, not when
+it produces a new table. PRODUCTS below is the authority; this list is a summary of it.
 
 The private archive keeps everything, including panels we do NOT publish because they are freely
 available elsewhere (Morpho lending state, which any archive node serves). Publishing those would
@@ -403,6 +409,24 @@ as a drop.
 
 Bitcoin `fate = "dropped"` begins 2026-08-26. Earlier partitions contain no drops because a
 defect made them impossible to record, not because none occurred.
+
+## Package fee rates
+
+A transaction's own fee rate is not what decides whether it is mined. A miner sorts by the
+ANCESTOR fee rate, so a transaction with an unconfirmed low-fee parent is worth less than it
+appears, and a child paying a large fee lifts its parent with it.
+
+`effective_fee_rate_sat_vb` is `ancestor_fees_sat / ancestor_vsize`. For a transaction with no
+unconfirmed parents it equals `fee_rate_sat_vb` exactly; where they diverge, the effective rate
+is the one that governs inclusion. One snapshot held a transaction paying 28.4 sat/vB whose
+effective rate was 2.1.
+
+`ancestor_count` above 1 marks membership in an unconfirmed chain, which is how fee bumping by
+a child shows up. The descendant columns are the mirror: what is waiting on this transaction.
+
+These come from a full node's own view, so they are null for transactions it never held, and
+they are recorded as first observed. Package structure changes as parents confirm, so treat
+them as the state at first sight rather than a running value.
 
 ## Before you build on this
 
