@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
                            e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct,
+                           e22_options_surface,
                            e21_btc_p2p)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -238,21 +239,24 @@ def _quote_round():
     appends. Nothing here touches `tracker`, `btc` or `ltc`.
     """
     q, r = e10_quotes.sample()
-    return q, r, e12_onramp.sample(), e13_remit.sample(), e17_perpdepth.sample()
+    return (q, r, e12_onramp.sample(), e13_remit.sample(), e17_perpdepth.sample(),
+            e22_options_surface.sample())
 
 
-def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_rows, failures):
+def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_rows,
+                    surf_rows, failures):
     """Drain a finished quote round. Returns True if the future was consumed."""
     if fut is None or not fut.done():
         return False
     try:
-        _q, _r, _o, _rm, _d = fut.result()
+        _q, _r, _o, _rm, _d, _s = fut.result()
         quote_rows.append(_q)
         if len(_r):
             route_rows.append(_r)
         onramp_rows.append(_o)
         remit_rows.append(_rm)
         depth_rows.append(_d)
+        surf_rows.append(_s)
     except Exception as exc:
         failures.append(f"quote round: {exc}")
     return True
@@ -307,6 +311,7 @@ def main() -> int:
     quote_rows: list[pd.DataFrame] = []
     route_rows: list[pd.DataFrame] = []
     depth_rows: list[pd.DataFrame] = []
+    surf_rows: list[pd.DataFrame] = []
     quote_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='quotes')
     quote_future = None
     fee_stop = threading.Event()
@@ -445,7 +450,7 @@ def main() -> int:
             # Non-blocking: collect a finished round, then start the next one. The main loop
             # must never wait on these -- see _quote_round.
             if _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
-                               remit_rows, depth_rows, failures):
+                               remit_rows, depth_rows, surf_rows, failures):
                 quote_future = None
             if quote_future is None and now - last_quote >= QUOTE_EVERY_S:
                 quote_future = quote_pool.submit(_quote_round)
@@ -491,7 +496,7 @@ def main() -> int:
         except Exception as exc:
             failures.append(f"quote round (final): {exc}")
         _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
-                        remit_rows, depth_rows, failures)
+                        remit_rows, depth_rows, surf_rows, failures)
     quote_pool.shutdown(wait=False)
 
     # Final catch-up and reconciliation. Anything seen, never mined, and absent from the pool is
@@ -708,6 +713,14 @@ def main() -> int:
         print(f"  E17: {len(ddf):,} depth snapshots, {len(okd)} readable "
               f"across {ddf.market.nunique()} markets", flush=True)
         write(e17_perpdepth.DATASET, ddf, run_id)
+
+    if surf_rows:
+        sdf = pd.concat(surf_rows, ignore_index=True)
+        oks = sdf[sdf.error.isna()]
+        print(f"  E22: {len(sdf):,} option rows, {len(oks):,} readable across "
+              f"{oks.asset.nunique() if len(oks) else 0} assets and "
+              f"{oks.expiry.nunique() if len(oks) else 0} expiries", flush=True)
+        write(e22_options_surface.DATASET, sdf, run_id)
 
     if route_rows:
         rdf = pd.concat(route_rows, ignore_index=True)

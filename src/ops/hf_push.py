@@ -117,6 +117,7 @@ WINDOWED = {
     "e16_dex_routes", "e17_perp_depth",
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
+    "e22_options_surface",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -273,6 +274,59 @@ PRODUCTS = {
                  "validator", "blockchain", "time-series"],
         "size": "10K<n<100K",
         "body": ATTESTATION_CARD,
+    },
+    "crypto-options-surface": {
+        "datasets": ["e22_options_surface", MANIFEST],
+        "example": "e22_options_surface",
+        "pretty": "Implied volatility surface for on-chain crypto options",
+        "tags": ["options", "implied-volatility", "derivatives", "greeks", "cryptocurrency",
+                 "ethereum", "bitcoin", "solana", "time-series", "finance"],
+        "size": "1M<n<10M",
+        "body": """# Crypto options implied volatility surface
+
+Every listed option on one venue, priced, with its greeks, sampled through the day.
+
+An option quote is computed on demand and kept by nobody. The chain that existed at any past
+moment is not recoverable from the venue or from the chain it settles on: only trades leave a
+record, and most of these strikes never trade.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e22_options_surface` | one instrument at one moment: strike, expiry, mark, forward, and the full greek set |
+
+## Reading it
+
+`iv`, `delta`, `gamma`, `vega`, `theta` and `rho` are the venue's own values, published
+alongside its mark price rather than recomputed here. That is deliberate: re-deriving implied
+volatility needs a rate and dividend assumption, and a number the venue itself margins against
+is the more useful one.
+
+Each asset's chain is fetched in one request and every row from it shares a `sampled_ts`,
+so grouping on `(asset, sampled_ts)` recovers one surface and adding `expiry` recovers one
+smile. `round_ts` is shared by the assets collected in the same pass, which is what to
+group on when comparing across assets at a moment.
+
+`strike` and `expiry` are parsed from the instrument name, and both are null where the name
+does not match the expected shape rather than being guessed. `expiry_ts` comes from the venue.
+
+## Before you build on this
+
+- One venue, and not the largest one. This is what a single order book quoted, not a
+  market-wide consensus. Anything inferred about crypto volatility generally needs a second
+  source.
+- Every listed instrument appears, including deep out-of-the-money strikes that never trade.
+  A mark price is published for those too, so filter before treating the surface as tradeable.
+- Put and call at the same strike and expiry carry the same implied volatility by construction.
+  Two rows agreeing is parity, not confirmation.
+- Sampled at an interval, so a move that reverses between samples is invisible. `sampled_ts`
+  is ours, taken at observation, and carries our network distance to the venue.
+- A fetch that fails writes one explicit error row for that asset with the measurements null.
+  Check `error` before reading an absent chain as a delisting.
+- Coverage per asset differs and changes as the venue lists and expires instruments; count
+  distinct `expiry` per day rather than assuming a fixed ladder.
+""",
     },
     "bitcoin-mempool-lifecycle": {
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
