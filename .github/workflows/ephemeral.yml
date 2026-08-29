@@ -45,7 +45,13 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 350        # 5h50m: the 5.5h loop plus setup, reconciliation and push
+    timeout-minutes: 350        # 5h50m against a 4.5h loop (DF_DURATION_S=16200).
+                                # This bounds the JOB, not the run: `gh run list` reports
+                                # wall-clock from run CREATION, which includes queue wait for a
+                                # runner (observed 50min-1.8h). A 5h45m entry there is a ~4h
+                                # job that waited 1h45m. Measured step times: Collect 4h30m,
+                                # harmonise 3s, HF push 9-15s -- there is no post-processing
+                                # creep, and reading the two as one number invents a crisis.
     steps:
       - name: Check out code
         uses: actions/checkout@v4

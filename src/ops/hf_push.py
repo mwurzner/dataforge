@@ -258,8 +258,16 @@ minus the second.
 **That figure is signed on purpose, and negative values are real.** A proposer can include
 attestations this node never held, so a negative number means the network carried more than we
 saw. Clamping it at zero would hide exactly the propagation asymmetry the column exists to show.
-In a well-observed slot the two counts agree to within about 0.5% (roughly 28,160 against
-28,163); the interesting rows are the ones that do not.
+
+**Read the median, not the total.** Across 1,319 window-closed slots the aggregate gap is −2.0%,
+but that is dragged by a tail: the **median slot is −0.07%**, p10 is −2.77%, and p90 is −0.01%.
+So a typical slot agrees with the chain almost exactly, and a minority account for nearly all of
+the difference — which is the interesting population, and the reason the aggregate alone would
+mislead you.
+
+One more thing the data says plainly: **0.0% of slots show us seeing MORE than the chain.** The
+gap is one-directional, exactly as a single vantage point should be. If you ever see a positive
+value here in quantity, suspect the collector before the network.
 
 ## Before you build on this
 

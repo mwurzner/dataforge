@@ -98,6 +98,13 @@ PAIRS = [
 # penalties made one round exceed 300s, and the drain discards anything over 180s -- so the
 # "polite" version silently threw away entire rounds.
 _MIN_GAP = {"lifi": 2.0, "kyberswap": 0.6, "cow": 0.6}
+
+# LI.FI is queried on a SUBSET of pairs. Measured in production: across all 17 pair-sizes it
+# trips its rate limit almost immediately and the breaker then skips the rest -- 114 skipped
+# against 9 answered, i.e. the provider contributes essentially nothing. Fewer requests that
+# SUCCEED are worth more than many that are refused, so it gets the two original pairs and the
+# others are served by CoW and KyberSwap, which answer 100% of the time.
+LIFI_PAIRS = {"WETH/USDC", "WBTC/USDC"}
 # When a provider answers 429, stop calling it for this long. Failing fast is both faster for us
 # and gentler on them than continuing to dial at a slower rate.
 _COOLDOWN_S = 600.0
@@ -232,6 +239,9 @@ def sample() -> tuple[pd.DataFrame, pd.DataFrame]:
         for size in sizes:
             amt = int(size * 10 ** sdec)
             for pname, fn in PROVIDERS.items():
+                pair_name = f"{sell_sym}/{buy_sym}"
+                if pname == "lifi" and pair_name not in LIFI_PAIRS:
+                    continue          # deliberately not queried; see LIFI_PAIRS
                 cool = _cooling_until(pname)
                 if cool > 0:
                     # Skip, and RECORD it. A skipped quote must be visible as an error, never
