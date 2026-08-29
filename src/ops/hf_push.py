@@ -132,6 +132,19 @@ ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
                 # Behaviour here is deliberate; see the private design notes.
                 "e19_stratum_jobs"}
 
+# Rows withheld because the source's terms forbid automated COLLECTION, not merely resale, so
+# there is no archive-only compromise of the kind e19 gets. Applied at stage time and to
+# HISTORICAL partitions, which is what makes it retroactive: a public repo mirrors its window,
+# so rows already published disappear on the next push with no manual repo surgery.
+#
+# Deliberately applied to the private archive as well. Keeping a private copy of data we should
+# not have gathered buys nothing and states the wrong intent. The git data repo still holds the
+# raw record, so the decision stays reversible if the source ever licenses it.
+#
+# paradex: "You further agree not to engage in data mining, robots, scraping, or similar data
+# gathering or extraction methods of content or information from the Services."
+REDACTIONS = {"e17_perp_depth": ("venue", {"paradex"})}
+
 _SHARED_TAIL = """
 ## Coverage
 
@@ -527,6 +540,8 @@ often on thinner markets.
   which is why `pool` and `swap_amount_raw` are frequently null.
 - Depth rows are snapshots at the observation interval, not a tick-level book. A move that
   reverses between observations is invisible.
+- Depth covers a single venue, so it sizes that one book rather than the market. Treat it as
+  one participant's view; a second venue would be a control and there is not one here.
 - `e14_l2_preconf` is mostly an attested absence. Violations are rare and the value is in the
   zeros being credible, which requires the coverage rows alongside them.
 - `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint
@@ -628,10 +643,30 @@ def _stage(target: Path, datasets, window, card: str | None) -> dict:
             files = [f for f in files if lo <= f.stem[:10] <= hi]
         if not files:
             continue
+        red = REDACTIONS.get(ds)
         for f in files:
             dst = target / f.relative_to(DATA)
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(f, dst)
+            if red is None:
+                shutil.copy(f, dst)
+                continue
+            # A source whose terms forbid collection must not be published from HISTORICAL
+            # partitions either, and rewriting the archive is the wrong lever: it destroys a
+            # record we may need. Filtering at stage time is declarative, reversible, and --
+            # because a public repo mirrors its window -- removes the rows already up there on
+            # the very next push, with no manual repo surgery.
+            import pandas as pd
+            col, drop = red
+            df = pd.read_parquet(f)
+            if col in df.columns:
+                df = df[~df[col].isin(drop)]
+            if not len(df):
+                dst.unlink(missing_ok=True)
+                continue
+            df.to_parquet(dst, index=False)
+        files = [f for f in files if (target / f.relative_to(DATA)).exists()]
+        if not files:
+            continue
         summary[ds] = len(files)
     if card:
         (target / "README.md").write_text(card, encoding="utf-8")
