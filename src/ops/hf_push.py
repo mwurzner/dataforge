@@ -72,6 +72,32 @@ def window_age_warning() -> str | None:
     return None
 
 
+def _nag(msg: str) -> None:
+    """Put the stale-window warning somewhere a person will actually meet it.
+
+    Printing into the log of a GREEN run is the diary entry this design set out to avoid --
+    nobody opens the output of a job that succeeded. The annotation surfaces on the run page,
+    the step summary on the run itself, and the sentinel lets the workflow open an issue,
+    which is the only one of the three that reaches an inbox unprompted.
+    """
+    nl = chr(10)
+    print(f"::warning title=Sample window stale::{msg}", flush=True)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        try:
+            with open(summary, "a", encoding="utf-8") as fh:
+                fh.write(nl + "> [!WARNING]" + nl + "> " + msg + nl)
+        except OSError:
+            pass
+    if os.environ.get("GITHUB_ACTIONS"):
+        try:
+            # Written to the CODE checkout, never into data/ -- that directory is committed
+            # to the private data repo and a sentinel does not belong in published history.
+            (ROOT / ".repin_needed").write_text(msg, encoding="utf-8")
+        except OSError:
+            pass
+
+
 def sample_window() -> tuple[str, str]:
     """The fixed inclusive [start, end] the public repos publish. Never derived from today."""
     from datetime import date as _d, timedelta as _t
@@ -583,6 +609,7 @@ def main() -> int:
     _w = window_age_warning()
     if _w:
         print("  !! " + _w, flush=True)
+        _nag(_w)
 
     ok = _push(ARCHIVE_REPO, everything, None, None, "archive", private=True)
     _receipt(ok, _last_archive_summary)

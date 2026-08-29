@@ -25,6 +25,9 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write        # only to raise the quarterly re-pin reminder, nothing else
     # RAISED FROM 90 ON MEASUREMENT, not on principle. The last two runs took 76.4 and 69.0
     # minutes, i.e. 14-21 minutes of headroom, and the universe grows every week as discovery
     # finds new markets and vaults -- so the job was on track to start timing out on its own.
@@ -81,6 +84,23 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_OWNER: dataforge-labs
         run: python -m src.ops.hf_push
+
+      - name: Remind me to re-pin the sample window
+        # The sentinel appears only once the pinned week passes DF_SAMPLE_REPIN_DAYS. An
+        # issue is the one channel here that reaches an inbox without someone thinking to
+        # open the Actions tab, which is exactly what a quarterly chore needs -- the warning
+        # printed into the log of a GREEN run was a diary entry by another name.
+        if: always() && hashFiles('.repin_needed') != ''
+        continue-on-error: true      # a missed reminder must never fail a collection run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Re-pin the public sample window"
+          if gh issue list --state open --search "$TITLE in:title" --json title --jq '.[].title' | grep -qxF "$TITLE"; then
+            echo "reminder already open, not duplicating"
+          else
+            gh issue create --title "$TITLE" --body "$(cat .repin_needed)"
+          fi
 
       - name: Gap check
         run: python -m src.ops.gapcheck
