@@ -43,12 +43,6 @@ class Chain:
     explorer: str
     getlogs_cap: int | None = None  # measured, never assumed (families 29/86/93/144b)
     drpc_slug: str | None = None
-    # Throughput, MEASURED not guessed. RPC defaults to 0.35s/4-way for public endpoints, tuned
-    # for flaky Base free endpoints; on these pools that yields only ~217 calls/min and made a
-    # full daily run take 93 minutes. Measured on 300 real market reads per chain -- see the
-    # per-chain comments below for the curve. Deliberately NOT set to the fastest observed value:
-    # a 300-call burst does not prove a 15,000-call sustained run, and a shared Actions IP is a
-    # worse place to discover a rate limit than this laptop.
     min_interval: float = 0.05
     concurrency: int = 12
 
@@ -74,8 +68,6 @@ CHAINS: dict[str, Chain] = {
         explorer="https://etherscan.io",
         getlogs_cap=10000,          # verified in family 149's Deposit sweep
         drpc_slug="ethereum",
-        # measured 2026-08-25: 0.35/4 -> 217/min | 0.10/8 -> 693 | 0.05/12 -> 946 | 0.0/24 -> 1095
-        # zero failures at every setting above 0.35/4; 0.05/12 keeps headroom.
         min_interval=0.05,
         concurrency=12,
     ),
@@ -95,15 +87,6 @@ CHAINS: dict[str, Chain] = {
         explorer="https://basescan.org",
         getlogs_cap=10000,          # measured family 143b: 10k OK, 50k -> HTTP 400
         drpc_slug="base",
-        # MEASURED ON BASE, and the measurement OVERTURNED the reasoning that preceded it.
-        # Base's endpoints are flakier, so "be more conservative here" seemed obvious -- and is
-        # wrong. Measured 2026-08-25 on 300 real market reads:
-        #     0.10/8  -> 167 calls/min, 3 failed     <- the "conservative" choice: worst of both
-        #     0.05/12 -> 203 calls/min, 0 failed     <- faster AND cleaner
-        #     0.02/16 -> 232 calls/min, 1 failed
-        # Backing off did not buy reliability, it just spent time. Note Base runs ~5x slower than
-        # Ethereum at EVERY setting (203 vs 946), so the ceiling here is the endpoints themselves,
-        # not our pacing -- a faster Base pool is the only thing that would move it.
         min_interval=0.05,
         concurrency=12,
     ),

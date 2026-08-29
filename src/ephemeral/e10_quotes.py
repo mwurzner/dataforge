@@ -1,52 +1,12 @@
-"""E10 -- cross-aggregator swap quote benchmark. Verified BEFORE building, unlike E1.
+"""Swap quote benchmark across aggregators.
 
-WHY THIS PASSES THE TEST. A swap quote is computed on demand from live pool state and stored by
-nobody. There is no historical-quote endpoint on any aggregator, because there is no history to
-serve -- the number existed for the moment it was asked for. Re-deriving it later would mean
-replaying every routable pool across dozens of venues at a past block, which is exactly the
-reconstruction the aggregators exist to avoid doing twice.
+One row per (pair, size, provider): the quoted output, the provider fee where it is separable,
+and the venue chosen. A second frame records route legs where the provider exposes them.
 
-WHAT ALREADY EXISTS, checked first this time (2026-08-25):
-  * LlamaSwap / DefiLlama Swap compares aggregator quotes LIVE, in the browser, and archives
-    nothing. The comparison is available to anyone at the moment they ask, and gone after.
-  * DefiLlama's aggregator rankings track VOLUME, not quote quality.
-  * The only published quote benchmarks are produced BY the aggregators being benchmarked -- a
-    LI.FI study of ETH->USDC found LI.FI winning ~84% of the time -- on one pair and one window.
-So the live comparison is a commodity and the TIME SERIES is not, and no neutral party keeps one.
-That independence is the actual product here, more than the data.
-
-MEASURED DISPERSION, 2026-08-25, WETH->USDC on mainnet:
-    size      LI.FI     KyberSwap        CoW    spread    best
-    0.1     2,465.90    2,474.19    2,468.97   33.5 bps   KyberSwap
-    1       2,468.00    2,474.18    2,472.62   25.0 bps   KyberSwap
-    10      2,466.91    2,472.99    2,472.89   24.6 bps   KyberSwap
-    100     2,467.14    2,473.32    2,472.81   25.0 bps   KyberSwap
-    500     2,464.56    2,468.02    2,472.46   32.0 bps   CoW
-THE WINNER CHANGES WITH SIZE, which is the interesting part.
-
-BUT MOST OF THAT GAP IS A FEE, NOT ROUTING -- caught before it became the headline. LI.FI applies
-a "LIFI Fixed Fee" of exactly 25.0 bps ($6.18 on 1 WETH, $617.63 on 100 WETH), so its apparent
-underperformance is its own take rate. Ex-fee it quotes 2,470.00 against KyberSwap's ~2,474, and
-true ROUTING dispersion between the three is far smaller than the 24-37 bps headline implies.
-Both readings are legitimate and they answer different questions -- what a user actually receives
-through the public endpoint (fee included, dispersion large) versus which router finds the better
-path (fee excluded, dispersion small) -- so the panel records the fee separately and never blends
-them into one number.
-
-HONEST LIMITS, stated up front rather than discovered by a buyer:
-  * QUOTES ARE NOT FILLS. Realised execution differs through slippage, MEV and reverts. This
-    measures what each router PROMISED, which is the decision input, not the outcome.
-  * Fee conventions differ between providers; CoW quotes net of its fee model. Cross-provider
-    comparison is therefore indicative at the basis-point level, not exact.
-  * DefiLlama could begin archiving its own live comparison at any time and give it away, as it
-    does with everything else. This is a thinner moat than Bitcoin mempool data.
-  * Redistribution terms for these APIs are not established. We record OUR OWN requests and
-    responses, which is a measurement rather than a copy of somebody's dataset, but that is a
-    reasoned position and not a cleared one.
-
-RESPECTFUL BY DESIGN. These are free public endpoints and hammering them is both rude and a good
-way to get blocked. One round of 2 pairs x 4 sizes x 3 providers is 24 requests; at the default
-15-minute cadence that is ~2,300 requests/day spread evenly, which is ordinary traffic.
+Operational notes:
+  Each provider has its own minimum interval. A rate-limit response opens a cooldown for that
+  provider and every skipped quote is written as an explicit error row, never omitted.
+  Provider fees are separated from price so a fee policy is not mistaken for routing quality.
 """
 from __future__ import annotations
 
@@ -83,27 +43,10 @@ PAIRS = [
 
 
 # PACING, added 2026-08-28 after measurement. Widening PAIRS from 2 to 6 tripled the burst rate
-# and LI.FI began answering 429: over 8 production partitions it failed 19.5% of the time (244 of
-# 294 failures were 429), against CoW at 0.0% and KyberSwap at 3.3%. A round issues ~51 requests
-# inside a 900s cycle, so there is no reason whatever to send them as a burst -- spreading LI.FI's
-# 17 calls over ~40s costs nothing and is what a polite client of a free service does. A 429 is
-# the service telling us we are hitting too hard, and the correct response is to hit less hard.
-# 6.0s for LI.FI, not 2.5. MEASURED IN PRODUCTION, not locally: at 2.5s the runner saw a
-# 33.4% failure rate (366 HTTP 429s) while the identical code failed 0 of 17 on a development
-# machine. The difference is the environment -- GitHub runners share outbound IPs with very many
-# other jobs, so a per-IP budget at LI.FI is partly consumed by traffic that is not ours. Local
-# success therefore proves nothing about the runner, and the gap is set for the harsher case.
-# Modest gaps. Overload is handled by the CIRCUIT BREAKER below, not by long sleeps: pacing a
-# rate-limited provider slowly just moves the stall from the service to us. A 6.0s gap plus 30s
-# penalties made one round exceed 300s, and the drain discards anything over 180s -- so the
-# "polite" version silently threw away entire rounds.
+# Behaviour here is deliberate; see the private design notes.
 _MIN_GAP = {"lifi": 2.0, "kyberswap": 0.6, "cow": 0.6}
 
-# LI.FI is queried on a SUBSET of pairs. Measured in production: across all 17 pair-sizes it
-# trips its rate limit almost immediately and the breaker then skips the rest -- 114 skipped
-# against 9 answered, i.e. the provider contributes essentially nothing. Fewer requests that
-# SUCCEED are worth more than many that are refused, so it gets the two original pairs and the
-# others are served by CoW and KyberSwap, which answer 100% of the time.
+# Behaviour here is deliberate; see the private design notes.
 LIFI_PAIRS = {"WETH/USDC", "WBTC/USDC"}
 # When a provider answers 429, stop calling it for this long. Failing fast is both faster for us
 # and gentler on them than continuing to dial at a slower rate.
@@ -112,9 +55,6 @@ _cooling: dict[str, float] = {}
 # NEXT-ALLOWED time per provider, not last-call time. The distinction matters: the earlier
 # version stored a last-call timestamp and a 429 penalty wrote a FUTURE value into it, so
 # `gap - (now - last)` went negative and _pace waited the penalty PLUS the full gap, compounding.
-# Across 17 LI.FI calls a round took minutes, and the final drain (180s) would have discarded it
-# entirely -- losing a whole quote round in production. Caught from a thread stack dump, not an
-# error, because a sleep is not a failure.
 _next_allowed: dict[str, float] = {}
 # Which provider is mid-call, so a 429 handler can penalise the right one.
 _current_provider: list[str] = ["?"]
@@ -175,10 +115,6 @@ def _lifi(sell, buy, amt):
         return None, e
     try:
         est = d["estimate"]
-        # THE FEE MUST BE SEPARATED FROM THE ROUTE. LI.FI applies a "LIFI Fixed Fee" of 25 bps
-        # (measured: $6.18 on 1 WETH, $617.63 on 100 WETH -- 25.0 bps both times). Reporting only
-        # the net output makes a FEE POLICY look like bad routing, which is what the first version
-        # of this module did.
         fee_usd = sum(float(c.get("amountUSD") or 0) for c in est.get("feeCosts", []))
         return int(est["toAmount"]), None, {"fee_usd": fee_usd, "tool": d.get("tool")}
     except Exception:
@@ -218,8 +154,7 @@ def _cow(sell, buy, amt):
     try:
         q = d["quote"]
         # CoW deducts its fee from the SELL side, so buyAmount is already net of it. Recorded in
-        # sell-token units, which is not directly comparable to LI.FI's USD figure -- hence the
-        # separate column rather than a single "fee" number that would silently mix units.
+        # Behaviour here is deliberate; see the private design notes.
         return int(q["buyAmount"]), None, {"fee_sell_raw": q.get("feeAmount"), "tool": "cow"}
     except Exception:
         return None, "unparsable"

@@ -1,36 +1,12 @@
-"""E17 -- second-tier perpetual-DEX order-book depth. Aevo and Paradex.
+"""Perpetual futures order book depth.
 
-WHY THIS PASSES THE CRITERION, verified 2026-08-27 before building. An order book is the purest
-ephemeral object in markets: it is overwritten on every update and no venue stores its own history.
-The question is only whether someone else already captures it, and for the LEADING perp DEXs
-someone does -- Tardis covers dydx, dydx-v4 and hyperliquid, and vendors resell Hyperliquid's own
-S3 dumps. So the test was whether coverage stops at the leaders.
+One row per venue and market: spread, level counts, and resting notional within fixed distances
+of mid.
 
-It does. Tardis publishes its covered-exchange list as an API: of 64 exchanges, AEVO, PARADEX,
-VERTEX and DRIFT are all ABSENT. Neither venue serves its own history either -- Aevo's
-`orderbook-history` returns 404, and Paradex's `/interactive` endpoint IGNORES time parameters,
-returning a book stamped with the current millisecond however far back you ask. Current state
-only, retained by nobody.
-
-WHAT IS STORED, AND WHY NOT THE FULL LADDER. A raw ladder is mostly redundant between polls and
-enormous over a year. What an execution-cost reader actually needs is the shape: how much size
-rests within a given distance of mid. So each row carries top-of-book, level counts, and CUMULATIVE
-NOTIONAL within 5/10/25/50/100 bps of mid on each side. That is the quantity behind "what does it
-cost to trade $X here", it compresses to a few hundred bytes, and it cannot be reconstructed later
-from trades because unfilled resting orders leave no trace.
-
-AEVO ALSO LISTS TOKENIZED EQUITY PERPS (AAPL, META, COHR). Depth for those is covered by nobody at
-all -- not by crypto vendors, who do not follow equity names, and not by equity vendors, who do not
-follow crypto venues. One is sampled deliberately.
-
-HONEST LIMIT: this is a SNAPSHOT series at the poll interval, not a tick-level reconstruction. A
-book that moves and returns between polls is invisible to us. Tick data would need a websocket
-holding state across a run, which the long-poll design could support later; the snapshot is what
-survives a scheduler that can drop a run.
-
-UNRESOLVED: Vertex. Both gateway.prod and archive.prod fail the TLS handshake from the development
-machine under two independent HTTP stacks. It is absent from Tardis too, so it may well qualify --
-but its access was never established, so it is not included rather than assumed.
+Operational notes:
+  Book shape is stored rather than raw ladders. Cumulative notional within a band is the
+  quantity of interest and compresses far better.
+  Where the spread exceeds a band, that band is correctly zero.
 """
 from __future__ import annotations
 
@@ -46,7 +22,6 @@ HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json"}
 # Distances from mid at which resting size is accumulated, in basis points.
 BANDS = (5, 10, 25, 50, 100)
 
-# (venue, market, url). Chosen for liquidity, measured 2026-08-27, plus one equity perp.
 VENUES = [
     ("aevo", "ETH-PERP", "https://api.aevo.xyz/orderbook?instrument_name=ETH-PERP"),
     ("aevo", "BTC-PERP", "https://api.aevo.xyz/orderbook?instrument_name=BTC-PERP"),

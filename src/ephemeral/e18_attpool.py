@@ -1,41 +1,14 @@
-"""E18 -- Ethereum beacon ATTESTATION POOL: attestations seen but never included.
+"""Ethereum beacon attestation pool.
 
-WHY THIS PASSES THE CRITERION, verified 2026-08-28 before building. The endpoint
-`/eth/v1/beacon/pool/attestations` returns, in its own documentation's words, "attestations known
-by the node but not necessarily incorporated into any block". Every provider that serves it
-(Chainstack, Ankr, BlockPI, Tatum) documents it as REAL-TIME, and none archives it. Measured
-churn: of 4,217 pooled attestations, 118 left and 272 appeared within 15 seconds.
+One row per slot: attester slots observed in the pool against attester slots that reached a
+block, and the difference between them.
 
-WHAT IS ALREADY AVAILABLE, checked properly rather than assumed. Rated Network and beaconcha.in
-both publish "attester effectiveness", and both derive it from ON-CHAIN data: participation rate,
-correctness, and the inclusion delay of attestations that WERE included. All of that is
-reconstructable from an archive node, so none of it is a product.
-
-The gap is the counterfactual. On chain you can see that a validator's attestation is missing.
-You CANNOT see whether it was never produced, produced but never propagated, or propagated and
-then never packed by a proposer. That distinction exists only in the pool, and it is the
-difference between "my node is broken" and "the proposer left me out" -- which is precisely the
-question a staking operator has when rewards dip.
-
-WHAT IS STORED. Not raw attestations: one poll returns ~3 MB and ~4,400 of them, which is ~1.8 GB
-a day of largely repeated data. Instead one row per (slot, committee_bits) group, carrying the
-UNION of attester bits ever seen in the pool against the union ever seen on chain. The difference
-between those two numbers is the measurement.
-
-SSZ bitlists are length-delimited by their highest set bit, so that bit is stripped before
-counting. Forgetting it inflates every count by exactly one -- invisible in aggregate, wrong in
-every row.
-
-HONEST LIMITS, stated because they bound what the data can support:
-  * ONE NODE'S VIEW. An attestation absent from our pool may have been in another node's. This is
-    the same limitation as the mempool datasets and is handled the same way: a lower bound on
-    what existed, never a claim about the network.
-  * The pool holds roughly the last 50 slots (~10 minutes), so an attestation that arrived and
-    was included between two polls is invisible. `n_polls_seen` is recorded so a reader can tell
-    a well-observed group from a glimpsed one.
-  * Inclusion is measured by reading each block's attestations as it arrives. A block we fail to
-    fetch leaves its inclusions uncounted, which OVERSTATES "never included", so fetch failures
-    are counted and carried on every row rather than smoothed away.
+Operational notes:
+  Counts come from SSZ bitfield populations. The highest set bit is a length delimiter and is
+  stripped before counting.
+  window_closed marks slots whose inclusion window was fully observed. Rows without it have
+  incomplete inclusion counts by construction.
+  The difference is signed. Negative values are expected and meaningful.
 """
 from __future__ import annotations
 
@@ -49,11 +22,9 @@ import pandas as pd
 DATASET = "e18_attestation_pool"
 # Accept-Encoding is not a detail here. The pool response is 3.4 MB plain and 0.63 MB gzipped
 # -- a 5.4x difference against a free public endpoint. At a 12s cadence the plain version would
-# pull 18.3 GB per collecting day, which is not a reasonable thing to take from a free service.
 HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json",
         "Accept-Encoding": "gzip"}
 
-# Keyless beacon APIs, in preference order. Probed 2026-08-28.
 BEACON_APIS = [
     ("publicnode", "https://ethereum-beacon-api.publicnode.com"),
 ]
@@ -64,8 +35,6 @@ FINALISE_AFTER_SLOTS = 40
 
 # Seconds between pool polls. NOT the 12s slot time, deliberately. An attestation lingers in the
 # pool for roughly 50 slots (~10 minutes), so a 30s cadence still observes each one ~20 times --
-# ample for accumulating a union of bits -- while costing 1.4 GB per collecting day gzipped
-# instead of 3.4 GB at slot cadence. Measured, not assumed: 0.63 MB per gzipped poll.
 POLL_EVERY_S = 30.0
 
 

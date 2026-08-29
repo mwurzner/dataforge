@@ -1,40 +1,14 @@
-"""E21 -- Bitcoin block propagation: which peer told us about each block, and when.
+"""Bitcoin block propagation across the peer network.
 
-WHAT THIS MEASURES. A new block spreads across the network peer to peer. Connect to many peers at
-once and every one of them announces it to you at a slightly different moment. The spread of those
-moments is the network's real propagation behaviour, and no chain records it: a block's timestamp
-is the miner's claim, not a measurement of when anyone learned of it.
+One row per (block, peer): when that peer announced that block to us. A second table records
+per-peer connection state.
 
-WHY IT PASSES THE CRITERION, verified 2026-08-28 before building. Academics have measured this
-with monitor nodes since 2015, but they publish PAPERS, not feeds -- no continuous public archive
-was found. And it is the only candidate today with NO rights ambiguity of any kind: Bitcoin's P2P
-protocol is permissionless by design, so connecting as a peer is participating in the network as
-intended. There are no terms to read, no operator to ask, and the data is ours outright.
-
-WHY BLOCKS AND NOT TRANSACTIONS. We set fRelay=0 in the version message, which tells peers not to
-announce transactions to us. That is deliberate on two counts: transaction inv volume across 150
-peers would be enormous (arrivals run 4-11/s, multiplied by every peer that announces them), and
-asking peers not to send it is politer than accepting a flood we would discard. Block inv is
-unaffected by fRelay, and blocks are the valuable, low-volume signal -- roughly 27 in a 4.5h
-window, against millions of transaction announcements.
-
-WHAT IS STORED:
-  * one row per (block hash, peer) -- when THAT peer announced THAT block to us
-  * one summary row per peer -- handshake success, user agent, services, announcements seen
-
-From the first, the propagation curve for each block follows directly: sort by receive time, and
-the spread between the first and the median peer is the measurement.
-
-HONEST LIMITS, which bound what this can support:
-  * ONE VANTAGE POINT. We measure when peers told US, not when they learned. Academic setups
-    connect to all ~27,000 reachable peers; we hold a couple of hundred. That is a genuine
-    multi-peer measurement and it is not network-wide, so treat it as a sample of the network,
-    never as the network.
-  * TIMES ARE OUR CLOCK, including our latency to each peer. Differences of milliseconds between
-    peers are partly network distance to us rather than propagation; differences of seconds are
-    real. `peer_addr` is kept so a reader can control for geography.
-  * A peer that disconnects stops announcing, which would look like slowness. Connection state is
-    tracked per peer and carried, so a gap can be told from a silence.
+Operational notes:
+  fRelay is 0, so peers do not send transaction announcements.
+  Dialling is bounded per pass. An unbounded loop starves the poll that collects data.
+  run() closes its connections on return, so call it once for the whole window with a stop
+  event rather than repeatedly with a short duration.
+  Timestamps are ours and include network distance to each peer.
 """
 from __future__ import annotations
 
@@ -203,11 +177,6 @@ class BlockPropagationCollector:
             # concluded that modern nodes had stopped announcing by inv. They have not: a
             # subsequent 11-minute run saw a block announced by 15 peers, ALL of them via inv.
             # The zero was sampling luck -- blocks arrive every ~10 minutes and a 180s window
-            # catches one about 30% of the time. The lesson is that a short test against a rare
-            # event proves nothing, and I reached for a protocol explanation before checking
-            # whether the window was simply too short.
-            # Both payloads begin with an 80-byte block header (headers has a varint count
-            # first), and the block hash is its double SHA-256, little-endian on the wire.
             now = time.time()
             try:
                 if cmd == "cmpctblock":

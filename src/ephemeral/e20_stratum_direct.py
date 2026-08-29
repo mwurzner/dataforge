@@ -1,54 +1,14 @@
-"""E20 -- Bitcoin mining-pool stratum jobs, collected DIRECTLY from the pools.
+"""Mining pool stratum jobs, collected directly.
 
-WHY THIS EXISTS ALONGSIDE E19, WHICH LOOKS THE SAME. The difference is provenance, and it is the
-whole point. E19 reads stratum.work's public SSE feed: excellent data, but it is THEIR compiled
-database, so redistributing or selling a systematic extraction engages the EU sui generis database
-right and their repo carries no licence. E20 connects to the pools ourselves, which makes US the
-maker of the database. Same measurement, different rights. E19 stays archive-only; E20 is ours.
+One row per job: the pool, the block it builds on, its nTime, coinbase, merkle branch count and
+clean-jobs flag.
 
-WHAT IS COLLECTED. Pools push `mining.notify` to every connected miner: the previous block hash
-they are building on, the coinbase they will claim, the merkle branches, nTime, and a clean-jobs
-flag meaning "abandon previous work, there is a new block". Jobs are replaced every few seconds
-and no chain records them. Once a block is found, every losing pool's template is gone.
-
-The signal, visible in the first minute of testing: pools on the SAME previous block with nTime
-spread across tens of seconds, and different merkle-branch counts -- i.e. who saw the new block
-first, and how differently they each built on it.
-
-HOW WE CONNECT, and why this shape was chosen deliberately:
-  * NO BITCOIN ADDRESS IS EVER SUPPLIED. Two pools send jobs on `mining.subscribe` alone; four
-    more need a `mining.authorize` first, and accept a plain worker name. `dataforge.observer`
-    is honest, identifiable, and cannot receive funds. Two pools (ckpool solo, public-pool)
-    require a VALID BTC ADDRESS and are therefore EXCLUDED rather than handed a fabricated one --
-    an invented address that happened to be real would route any reward to a stranger, which is
-    exactly the mistake an early probe of this idea made.
-
-    A MEASUREMENT ERROR WORTH RECORDING, because it nearly set the pool list wrong. The first
-    probe reported "8 of 10 pools send jobs on subscribe alone". It was false: it searched for
-    the SUBSTRING "mining.notify", which appears in every pool's subscribe RESPONSE as the name
-    of a subscription, not as an actual job. Six of those eight were sending a 116-byte
-    acknowledgement and nothing else. The tell was the byte count -- a real job with merkle
-    branches cannot fit in 116 bytes. Detection now matches on the JSON method field.
-  * An honest identifier in the subscribe params, not a spoofed miner string. If an operator
-    looks at who is connected, they should be able to tell what we are.
-  * ONE connection per pool, held open. A miner would hold one too; this is the smallest possible
-    footprint for the data.
-  * We never submit shares, so we consume no share-validation work.
-
-STATED PLAINLY: pool terms are SILENT on read-only connections rather than permissive, and this
-is collected on the operator's explicit decision to proceed. Nothing here circumvents access
-control -- the endpoints are public and unauthenticated, the protocol is used as designed, and
-the jobs are broadcast simultaneously to thousands of miners. But "not prohibited" is not the
-same as "invited", and that distinction is recorded rather than glossed.
-
-HONEST LIMITS:
-  * `pool_name` is the HOST WE CHOSE to connect to, not a claim decoded from the data. That is
-    better provenance than inferring identity from a coinbase, but it means a pool operating
-    several stratum hostnames appears once per hostname. slushpool.com and braiins.com are the
-    same operator and are both listed; rows are tagged so they can be collapsed.
-  * A dropped connection loses jobs silently, so reconnects are counted per pool and carried.
-  * We see what a miner on that endpoint sees. Pools running regional endpoints may serve
-    different templates elsewhere.
+Operational notes:
+  Read-only. No shares are submitted and no payout address is supplied anywhere. Pools requiring
+  a valid address are excluded rather than given a fabricated one.
+  `pool` is the endpoint connected to; `operator` collapses endpoints run by the same operator.
+  Send the subscribe while the socket is still blocking, then switch to non-blocking. Reversing
+  that order fails silently.
 """
 from __future__ import annotations
 
@@ -63,13 +23,6 @@ DATASET = "e20_stratum_jobs_direct"
 
 NEWLINE = chr(10).encode()
 
-# Probed 2026-08-28: each of these delivered mining.notify on subscribe alone, no authorize.
-# poolin resolves only on the btc.ss host; bs.poolin.com does not resolve and binance timed out.
-# `operator` collapses hostnames run by the same pool (slushpool is Braiins' legacy endpoint).
-# (name, host, port, operator, needs_authorize). Measured 2026-08-28 with method-based
-# detection. EXCLUDED: solo.ckpool.org and public-pool.io both require a valid BTC address
-# ("Authorization validation error"), and we will not invent one. bs.poolin.com does not
-# resolve; binance timed out.
 POOLS = [
     ("braiins",   "stratum.braiins.com",   3333, "braiins", False),
     ("slushpool", "stratum.slushpool.com", 3333, "braiins", False),

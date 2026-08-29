@@ -36,9 +36,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 DATASET = "e1_mempool_lifecycle"
 HDRS = {"Content-Type": "application/json", "User-Agent": "dataforge/1.0"}
 
-# Endpoints that answered txpool/filter methods in the probe. publicnode is the only one that
-# served BOTH txpool_status and the pending filter, so it leads; the others are fallbacks for the
-# filter only.
 ENDPOINTS = [
     "https://ethereum-rpc.publicnode.com",
     "https://eth.merkle.io",
@@ -167,8 +164,6 @@ class MempoolTracker:
                 # PROPOSER-CLOCK dwell: comparable to on-chain data, but mixes two clocks.
                 if mts:
                     dwell = max(mts - first, 0.0)
-                # LOCAL-CLOCK dwell: both ends measured by this observer, so it is internally
-                # consistent. Trust it only where lag_blocks == 0; above that it is late.
                 if obs:
                     dwell_local = max(obs - first, 0.0)
             elif h in still_pending:

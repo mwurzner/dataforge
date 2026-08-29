@@ -52,7 +52,6 @@ DURATION_S = int(os.environ.get("DF_DURATION_S", 5 * 3600 + 1800))   # 5.5h
 POLL_S = float(os.environ.get("DF_POLL_S", 5))
 DIVERGENCE_EVERY_S = float(os.environ.get("DF_DIVERGENCE_EVERY_S", 300))
 # Bitcoin cadences. A full txid read is 3.1 MB gzipped, so 60s keeps the job's download to about
-# 1 GB per 5.5h window while still resolving the ~327 new transactions/min that actually arrive.
 BTC_POLL_S = float(os.environ.get("DF_BTC_POLL_S", 60))
 BTC_BLOCK_EVERY_S = float(os.environ.get("DF_BTC_BLOCK_EVERY_S", 120))
 BTC_DIVERGENCE_EVERY_S = float(os.environ.get("DF_BTC_DIVERGENCE_EVERY_S", 900))
@@ -64,23 +63,11 @@ QUOTE_EVERY_S = float(os.environ.get("DF_QUOTE_EVERY_S", 900))
 # every 30 min caps the worst-case loss at 30 minutes instead of 5.5 hours.
 CHECKPOINT_EVERY_S = float(os.environ.get("DF_CHECKPOINT_EVERY_S", 1800))
 # Seconds between pre-existing fee lookups. 2.0 gives ~0.5 req/s, about 8,000 transactions over a
-# 4.5h run, roughly 10% of a typical 82,000-transaction opening snapshot. Raise it to back off.
 PRE_FEE_EVERY_S = float(os.environ.get("DF_PRE_FEE_EVERY_S", 2.0))
-# Full-mempool RPC snapshot. One call supplies ~34% of the tracked set's fees against ~9% from a
-# whole run of per-transaction sampling, so this is the dominant source. 15 minutes keeps the wire
-# cost near 83 MB per run (4.6 MB gzipped per call) against a free public node.
-# TWO cadences, because the nodes hold different halves of the problem (see NODE_FAST /
-# NODE_DEEP). The cheap young-mempool node is polled often to catch ARRIVALS, whose median dwell
-# is 10.2 minutes; the expensive deep-backlog node is polled rarely, because an 11-day-old
-# transaction is not going anywhere. Wire cost per 4.5h run: ~135 MB fast + ~88 MB deep.
 RPC_FAST_EVERY_S = float(os.environ.get("DF_RPC_FAST_EVERY_S", 120))
 RPC_MEMPOOL_EVERY_S = float(os.environ.get("DF_RPC_MEMPOOL_EVERY_S", 1800))
 # E1 STORAGE MODE. "aggregate" (default) stores a per-minute summary plus full rows for the
-# never-mined transactions, instead of a row per transaction. E1 is 85% of everything this
-# project stores AND is the one dataset established as NOT scarce -- Flashbots publishes the same
-# measurement free and CC-0 from a wider network. Per-transaction rows exhaust the 100 GB free
-# tier in 1.7 years; aggregating extends it to 11.7 and leaves the room for Bitcoin, which has no
-# free equivalent. Set DF_E1_MODE=full to restore per-transaction storage.
+# Behaviour here is deliberate; see the private design notes.
 E1_MODE = os.environ.get("DF_E1_MODE", "aggregate").lower()
 
 
@@ -124,9 +111,7 @@ def _fee_sampler(btc, stop: "threading.Event", failures: list, ltc=None) -> None
         except Exception as exc:
             if len(failures) < 200:
                 failures.append(f"e8 recent: {exc}")
-        # Litecoin was collected for three days with fee_sat/vsize/fee_rate at exactly 0% --
-        # litecoinspace serves /mempool/recent with fees and we simply never called it. Found by
-        # auditing column completeness across every dataset rather than by any failure.
+        # Behaviour here is deliberate; see the private design notes.
         if ltc is not None:
             try:
                 ltc.poll_recent()
@@ -302,9 +287,6 @@ def main() -> int:
 
     tracker = e1_mempool.MempoolTracker(e1_mempool.ENDPOINTS[0])
     btc = e8_btc_mempool.BtcMempoolTracker()
-    # Litecoin rides the identical Esplora API (probed: litecoinspace.org answers the same
-    # endpoints). Tiny pool (~10 KB a poll), no second provider, so no cross-check and no
-    # divergence sampling; the frame records that honestly rather than faking a weaker claim.
     attp = e18_attpool.AttestationPoolTracker()
     strat = e19_stratum.StratumJobCollector()
     sdirect = e20_stratum_direct.DirectStratumCollector()
@@ -566,9 +548,7 @@ def main() -> int:
     bdf = btc.frame()
     # A SHORT RUN OBSERVES NOTHING. The first polls establish a baseline of pre-existing
     # transactions whose first_seen is unobservable; only what arrives AFTER that is lifecycle.
-    # Four early test dispatches published ~80k-row partitions that were 100% baseline -- the
-    # standing pool re-listed, with zero first-seen rows and zero drops. Pure noise in the
-    # product dataset. A frame with no observed arrivals and no resolved drops is refused.
+    # Behaviour here is deliberate; see the private design notes.
     observed = int(bdf["first_seen_ts"].notna().sum()) if len(bdf) else 0
     n_drops = int((bdf["fate"] == "dropped").sum()) if len(bdf) else 0
     if observed == 0 and n_drops == 0:

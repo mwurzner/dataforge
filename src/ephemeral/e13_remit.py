@@ -1,27 +1,9 @@
-"""E13 -- cross-border remittance pricing panel, from Wise's public comparison service.
+"""Retail remittance quotes across corridors.
 
-WHY THIS PASSES THE CRITERION, verified before building (2026-08-26). A remittance quote is
-priced per request and stored by nobody public: the only systematic record found is the World
-Bank's Remittance Prices Worldwide survey, which is QUARTERLY and mystery-shopped. No
-high-frequency archive of provider margins exists that we could find. The quotes themselves are
-gone the moment they change.
+One row per corridor and provider: the rate offered, fees, and the amount received.
 
-WHO CARES, and this one is unusually direct: Wise, Western Union, PayPal and Remitly are LISTED
-companies whose take-rates drive earnings. A daily panel of effective pricing per corridor per
-provider is competitive telemetry on public companies, of the kind equity analysts pay for in
-other industries. First probe showed a 4.5% gap between best and worst provider on the same
-EUR to USD transfer.
-
-THE SOURCE, stated plainly because it shapes the data: this is WISE'S OWN comparison feed. Wise
-collects competitor quotes to power its transparency marketing, so (a) coverage per corridor is
-whatever Wise chooses to compare against, (b) a competitor's quote carries a collection lag that
-the `date_collected` field exposes when present, and (c) the publisher has an interest in looking
-cheapest. We record the feed as observed and keep Wise's own quote clearly labelled, so the bias
-is at least constant and visible rather than hidden. Redistribution terms for this feed are a
-reasoned position, not a cleared one, same as e10 and e12.
-
-CORRIDORS: the largest remittance lanes plus the intra-European pair where bank pricing is worst.
-One amount per corridor; ~9 requests per round at the e10 cadence is ordinary client traffic.
+Operational notes:
+  Currency codes, not country codes. Confusing the two silently empties most corridors.
 """
 from __future__ import annotations
 
