@@ -599,6 +599,14 @@ def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
     if not summary:
         print(f"  !! nothing to push for {label}", flush=True)
         return False
+    # A product carrying ONLY the manifest is not a product. Every product includes the manifest,
+    # which is never windowed, so a newly defined product would otherwise publish immediately --
+    # a public repo whose card describes data it does not yet have, sitting empty until the
+    # collector that fills it next runs. Creating the repo is the irreversible half; waiting is
+    # free. The archive (window is None) is exempt: it accumulates everything by design.
+    if window is not None and not any(k != MANIFEST for k in summary):
+        print(f"  !! {label}: manifest only, no dataset partitions yet -- not publishing", flush=True)
+        return False
     api = HfApi(token=token)
     try:
         api.create_repo(repo_id=repo, repo_type="dataset", private=private, exist_ok=True)
