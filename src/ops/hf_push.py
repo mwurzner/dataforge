@@ -123,7 +123,7 @@ WINDOWED = {
     "e16_dex_routes", "e17_perp_depth",
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
-    "e22_options_surface",
+    "e22_options_surface", "e21_btc_relay_floor",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -338,7 +338,7 @@ does not match the expected shape rather than being guessed. `expiry_ts` comes f
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
                      "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
                      "e1_mempool_minutely", "e1_mempool_dropped", "e1_mempool_lifecycle",
-                     "e3_mempool_divergence", MANIFEST],
+                     "e3_mempool_divergence", "e21_btc_relay_floor", MANIFEST],
         "example": "e8_btc_mempool_lifecycle",
         "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
         "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
@@ -364,6 +364,7 @@ leaves no record at all. Both are recorded here as they happen.
 | `e1_mempool_minutely` | one minute of Ethereum mempool activity |
 | `e1_mempool_dropped` | an Ethereum transaction that was never mined |
 | `e3_mempool_divergence` | Ethereum pending-set comparison across views |
+| `e21_btc_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
 
 `e1_mempool_lifecycle` stops at 2026-08-26. Per-transaction Ethereum rows were discontinued
 there: the Flashbots Mempool Dumpster publishes the same measurement under CC-0 from a wider
@@ -427,6 +428,20 @@ a child shows up. The descendant columns are the mirror: what is waiting on this
 These come from a full node's own view, so they are null for transactions it never held, and
 they are recorded as first observed. Package structure changes as parents confirm, so treat
 them as the state at first sight rather than a running value.
+
+## Relay floors
+
+A transaction below a node's minimum relay fee is not merely deprioritised: that node will not
+forward it, so it never reaches the miners at all. Every peer announces its own floor on
+connect and again whenever it moves, and those announcements are kept by nobody.
+
+`e21_btc_relay_floor` is one row per announcement, so a peer appears repeatedly as its floor
+changes. `min_relay_fee_sat_kvb` is the wire value; `min_relay_fee_sat_vb` is the same number
+in the units fee tools quote.
+
+Expect little variation while the mempool is quiet, because nodes then sit at whatever they
+were configured with. The floor moves when a mempool fills and starts evicting, which is
+exactly when it matters and exactly when it cannot be reconstructed afterwards.
 
 ## Before you build on this
 
