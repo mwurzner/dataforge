@@ -274,10 +274,16 @@ leaves no record at all. Both are recorded here as they happen.
 | `e9_btc_mempool_divergence` | one view of the pending set at one instant, sized and compared against the others |
 | `e11_ltc_mempool_lifecycle` | the same, for Litecoin |
 | `e15_fee_estimators` | one fee estimate from one provider at one moment, with its target |
-| `e1_mempool_lifecycle` | an Ethereum transaction seen pending |
+| `e1_mempool_lifecycle` | an Ethereum transaction seen pending (ends 2026-08-26, see below) |
 | `e1_mempool_minutely` | one minute of Ethereum mempool activity |
 | `e1_mempool_dropped` | an Ethereum transaction that was never mined |
 | `e3_mempool_divergence` | Ethereum pending-set comparison across views |
+
+`e1_mempool_lifecycle` stops at 2026-08-26. Per-transaction Ethereum rows were discontinued
+there: the Flashbots Mempool Dumpster publishes the same measurement under CC-0 from a wider
+node set, so a duplicate was not worth the storage it took. `e1_mempool_minutely` and
+`e1_mempool_dropped` continue. The earlier partitions are kept and keep their own name, so
+nothing joins them to the newer tables and reads a change of population as a trend.
 
 ## Fee rate coverage
 
@@ -387,6 +393,10 @@ often on thinner markets.
   reverses between observations is invisible.
 - `e14_l2_preconf` is mostly an attested absence. Violations are rare and the value is in the
   zeros being credible, which requires the coverage rows alongside them.
+- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint
+  served a stale `safe` tag through much of the period, which yields a lag of tens of millions
+  of blocks. The raw numbers are published uncorrected so the endpoint's own inconsistency
+  stays visible; filter on the flag before using the column.
 """,
     },
     "remittance-pricing-panel": {
