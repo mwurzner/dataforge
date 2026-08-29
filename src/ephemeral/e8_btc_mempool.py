@@ -66,6 +66,14 @@ ABSENT_POLLS = 10
 VERIFY_CAP = 1500       # authoritative status checks per run; the rest stay `unresolved`
 
 
+def _sat(btc) -> int | None:
+    """Node fee fields are BTC; this dataset stores satoshis throughout."""
+    try:
+        return int(round(float(btc) * 1e8))
+    except (TypeError, ValueError):
+        return None
+
+
 def _get(url: str, timeout: int = 45):
     """Returns (payload, error). A transport failure must NEVER render as an empty mempool --
     families 70/81/86/93 each had a fully-failed harvest print as a clean zero."""
@@ -343,7 +351,8 @@ class BtcMempoolTracker:
             if txid in self.fees:
                 continue
             vsize = e.get("vsize")
-            base = (e.get("fees") or {}).get("base")
+            f = e.get("fees") or {}
+            base = f.get("base")
             if not isinstance(vsize, int) or vsize <= 0 or base is None:
                 continue
             # `fees.base` is BTC; the dataset stores satoshis, as the arrivals feed does.
@@ -367,6 +376,14 @@ class BtcMempoolTracker:
                     "ancestor_count": anc if isinstance(anc, int) else None,
                     "descendant_count": desc if isinstance(desc, int) else None,
                     "ancestor_vsize": e.get("ancestorsize"),
+                    "descendant_vsize": e.get("descendantsize"),
+                    # A miner sorts by the ANCESTOR fee rate, not the transaction's own. Without
+                    # these two the effective rate is uncomputable from this dataset -- we held
+                    # ancestor_vsize, which is half the ratio. Observed on one snapshot: a
+                    # transaction paying 28.38 sat/vB whose package rate was 2.11, because it
+                    # was dragging an unconfirmed low-fee parent.
+                    "ancestor_fees_sat": _sat(f.get("ancestor")),
+                    "descendant_fees_sat": _sat(f.get("descendant")),
                 }
         self.n_node_fees += got
         # The node's mempool size against ours, at the same instant. These disagree enormously
@@ -462,6 +479,18 @@ class BtcMempoolTracker:
                 "rbf_signalled": nm.get("rbf_signalled"),
                 "ancestor_count": nm.get("ancestor_count"),
                 "descendant_count": nm.get("descendant_count"),
+                # ancestor_vsize was captured but never written until now, so the package rate
+                # could not be reconstructed from published partitions at all.
+                "ancestor_vsize": nm.get("ancestor_vsize"),
+                "descendant_vsize": nm.get("descendant_vsize"),
+                "ancestor_fees_sat": nm.get("ancestor_fees_sat"),
+                "descendant_fees_sat": nm.get("descendant_fees_sat"),
+                # What a miner actually sorts by. Equals fee_rate_sat_vb for a transaction with
+                # no unconfirmed parents, and diverges sharply for one that has them.
+                "effective_fee_rate_sat_vb": (
+                    round(nm["ancestor_fees_sat"] / nm["ancestor_vsize"], 4)
+                    if (nm.get("ancestor_fees_sat") is not None and nm.get("ancestor_vsize"))
+                    else None),
                 "mined_height": height,
                 "block_observed_ts": obs,
                 "left_pool_ts": leftat,
