@@ -44,9 +44,6 @@ def rpc_for(chain: Chain, purpose: str = "call") -> RPC:
         private = True
     rpc = RPC(urls=urls, private=private)
     if purpose != "logs" and not private:
-        # Apply the per-chain MEASURED throughput settings. Only for the high-volume call pool:
-        # getLogs is a weekly job whose throughput is irrelevant, and pushing it would only risk
-        # tripping the provider limits that the chunker then has to recover from.
         rpc.min_interval = chain.min_interval
         rpc.concurrency = chain.concurrency
     return rpc

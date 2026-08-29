@@ -1,47 +1,13 @@
-"""E8 -- Bitcoin mempool lifecycle. The second chain, and it PASSES the same test as E1.
+"""Bitcoin and Litecoin mempool lifecycle.
 
-MEASURED 2026-08-25, not assumed. The decisive probe was not "can we see the mempool" (of course
-we can) but "can someone retrieve a first-seen time for a transaction mined weeks ago":
+Records each transaction from first sighting to its outcome: mined, still pending, or dropped.
+Fee and vsize are attached where available.
 
-    live (unconfirmed)   -> [1778435949]   AVAILABLE
-    ~1 day old           -> [0]            NOT AVAILABLE
-    ~30 days old         -> [0]            NOT AVAILABLE
-    ~365 days old        -> [0]            NOT AVAILABLE
-
-Confirmation ERASES the timing. So Bitcoin mempool lifecycle is un-backfillable exactly as
-Ethereum's is, and it is free and keyless from two independent providers.
-
-WE DERIVE first_seen FROM OUR OWN POLLING and never read the provider's own first-seen field.
-Legally that makes the timestamps OUR measurements of a public broadcast network rather than a
-redistribution of somebody else's dataset. Methodologically it makes E8 the same instrument as E1.
-
-THE ARTIFACT THIS MODULE EXISTS TO AVOID, found by testing rather than reasoning. A naive
-poll-to-poll diff reported 642 transactions "dropped" in 200 seconds. Sampling 12 of them against
-the provider's own status endpoint: ALL TWELVE WERE STILL PENDING. The txid endpoint is served by
-load-balanced nodes whose views differ slightly, so set-differencing consecutive polls
-manufactures disappearances that never happened -- and `dropped` is the single most valuable
-column here, so a fabricated one would poison exactly what the dataset is for.
-
-Two defences, both measured rather than assumed sufficient:
-  1. DEBOUNCE. A transaction must be absent for ABSENT_POLLS consecutive polls before it is even a
-     candidate, which removes single-poll flicker.
-  2. AUTHORITATIVE VERIFICATION. Every surviving candidate is checked against /tx/{id}/status at
-     the end of the run. Only a transaction the provider itself reports as neither confirmed nor
-     present is called `dropped`. Anything we could not check is `unresolved` -- never `dropped`.
-The same flicker corrupts first-seen, so the BASELINE is the UNION of the first BASELINE_POLLS
-polls rather than a single one; a transaction that flickers out of the first poll would otherwise
-be handed a fabricated arrival time.
-
-WHY BITCOIN IS A DIFFERENT DATASET, not a copy of E1. Measured on a random 40 of the live
-mempool: median age ~107 DAYS, against Ethereum dwell times of seconds to minutes. Bitcoin runs a
-large standing backlog of fee-starved transactions that Ethereum has no equivalent of.
-
-CAVEAT THAT MUST TRAVEL WITH THE DATA: a mempool is NODE-LOCAL and retention is a node policy.
-Bitcoin Core evicts after 336h by default, yet mempool.space served 115-day-old entries. Polling
-two providers measures that difference instead of hiding it -- they disagreed by ~5,900
-transactions at the same instant.
-
-MEASURED COST: 3.1 MB gzipped per full poll, ~327 new transactions/min, ~471k rows/day.
+Operational notes:
+  A drop is only recorded once the transaction is absent from the chain, absent from every
+  provider pool we hold, and has stayed absent for the debounce period. Weaker tests produce
+  false positives in bulk.
+  Fee coverage is partial and varies with load. It is never imputed.
 """
 from __future__ import annotations
 
@@ -59,23 +25,11 @@ DATASET = "e8_btc_mempool_lifecycle"
 DIVERGENCE_DATASET = "e9_btc_mempool_divergence"
 HDRS = {"User-Agent": "dataforge/1.0", "Accept-Encoding": "gzip"}
 
-# Both free, keyless, independent. mempool.space leads on latency (0.55s vs 3.79s measured);
-# blockstream.info is the cross-check and the divergence counterpart.
 PROVIDERS = {
     "mempool.space": "https://mempool.space/api",
     "blockstream.info": "https://blockstream.info/api",
 }
 
-# OTHER UTXO CHAINS RUNNING THE SAME ESPLORA API. Probed 2026-08-25: litecoinspace.org answers
-# /mempool/txids identically (159 txids, 0.15s), so the collector generalises with a URL swap and
-# no code change. Blockchair covers BCH/Doge/Zcash but caps a mempool listing at 10 rows, so those
-# are NOT collectable free and are excluded rather than half-collected. Liquid answered but its
-# mempool was empty, which is a property of the chain, not a failure.
-#
-# HONEST ON VALUE: Litecoin costs almost nothing to add (10 KB a poll against Bitcoin's 5.8 MB)
-# and is just as un-backfillable, but its audience is far thinner. The reason to collect it is
-# that a CROSS-CHAIN UTXO fee-market panel during a congestion event is something nobody has,
-# and not collecting is the only irreversible choice available.
 CHAINS = {
     "btc": {"dataset": "e8_btc_mempool_lifecycle",
             "divergence": "e9_btc_mempool_divergence",
@@ -88,16 +42,7 @@ CHAINS = {
 }
 
 # A public Bitcoin Core RPC. `getrawmempool true` returns the node's WHOLE mempool with an exact
-# fee and vsize per entry -- the only bulk fee source found. Probed 2026-08-28: ankr answers 200
-# with a null result, blockchain.info 404s, nownodes 422s, getblock does not resolve. This is the
-# only keyless one that works, so a failure here degrades coverage rather than breaking the run.
-# Ordered by MEMPOOL SIZE, which is what decides coverage. These nodes disagree enormously
-# because maxmempool and peering differ: measured at one instant, tatum held 81,381 transactions
-# (maxmempool 4 GB), publicnode 28,856 (256 MB) and drpc 6,096 (300 MB), against mempool.space's
-# 86,532. Overlap with our tracked set is 92.8% for tatum against 34.1% for publicnode, so the
-# choice of node is worth more than any amount of per-transaction polling.
-# Probed 2026-08-28: 1rpc returns non-JSON, blastapi 403s, nodies does not resolve, blockchair
-# 404s, omniexplorer 405s. A failure here degrades coverage; it never breaks the run.
+# Behaviour here is deliberate; see the private design notes.
 NODE_RPCS = [
     ("tatum", "https://bitcoin-mainnet.gateway.tatum.io"),
     ("publicnode", "https://bitcoin-rpc.publicnode.com"),
@@ -106,19 +51,7 @@ NODE_RPCS = [
 NODE_RPC = os.environ.get("DF_BTC_NODE_RPC", NODE_RPCS[0][1])
 
 # TIERED, because mempool SIZE turns out to be a proxy for transaction AGE, and the two tiers
-# solve different halves of the coverage problem. Measured at one instant:
-#     drpc        8,715 txs   1.0 MB   median age    27 min   median fee 2.25 sat/vB
-#     publicnode 32,347 txs   4.8 MB   median age   2.8 h     median fee 0.35 sat/vB
-#     tatum      83,584 txs   9.8 MB   median age    11 days  median fee 0.21 sat/vB
-# A newly arrived transaction is in EVERY node's mempool, so arrivals do not need a big node --
-# they need a FREQUENT one, and the small node is 10x cheaper to poll. The big node is only
-# needed for the old low-fee backlog, which barely changes and can be sampled rarely.
-# Measured dwell explains why this matters: median 10.2 min, and 61.7% of arrivals live under 15
-# minutes, so a 15-minute-only cadence has an arrivals ceiling near 38%. Polling the cheap node
-# every 2 minutes lifts that ceiling to ~93%.
-# Litecoin, same trick. Its mempool is tiny (162 transactions when probed), so ONE call covers
-# essentially all of it and costs almost nothing. Probed 2026-08-28: tatum answers, publicnode
-# 404s, nownodes 422s, drpc 400s -- so there is a single source and no fallback to offer.
+# Behaviour here is deliberate; see the private design notes.
 LTC_NODES = [("tatum", "https://litecoin-mainnet.gateway.tatum.io")]
 
 NODE_FAST = [("drpc", "https://bitcoin.drpc.org"),
@@ -128,12 +61,7 @@ NODE_DEEP = [("tatum", "https://bitcoin-mainnet.gateway.tatum.io"),
 
 BASELINE_POLLS = 3      # union of the first N polls defines "was already here"
 # ABSENT_POLLS IS TUNED FROM MEASUREMENT, and it is the lever that matters. At 3 the primary
-# provider generated ~600 candidates per 10 minutes of which the status endpoint confirmed ~100%
-# were still pending -- roughly 60 phantoms a minute, which no per-transaction verification budget
-# can absorb over a 5.5h run. Flicker returns within a poll or two; a genuine drop (RBF
-# replacement, or eviction after Bitcoin Core's 336h) never comes back. So requiring TEN
-# consecutive absences -- ten minutes at the production cadence -- separates them almost for free,
-# where verification was paying per candidate to learn the same thing.
+# Behaviour here is deliberate; see the private design notes.
 ABSENT_POLLS = 10
 VERIFY_CAP = 1500       # authoritative status checks per run; the rest stay `unresolved`
 
@@ -186,8 +114,7 @@ class BtcMempoolTracker:
         # every other source we poll. Keyed by txid; see snapshot_node_fees.
         self.node_meta: dict[str, dict] = {}
         # WHICH node answered, counted per source. Coverage depends entirely on this: the
-        # deep node covers 93% of the tracked set and the fallback 34%, so a silent failover
-        # would halve the dataset's most important column with no visible signal.
+        # Behaviour here is deliberate; see the private design notes.
         self.node_source = None
         self.node_source_counts: dict[str, int] = {}
         self.node_pool_size: list[tuple[float, int, int]] = []   # (ts, node_count, our_count)
@@ -205,11 +132,7 @@ class BtcMempoolTracker:
         # whole block whenever an interval runs long or short -- and block intervals are the
         # noisiest thing in Bitcoin. With it, blocks_waited is exact arithmetic.
         self.tip_at_seen: dict[str, int] = {}
-        # A SECOND PROVIDER'S POOL, refreshed in bulk. Measured flicker on the primary was 685 of
-        # 685 -- roughly 98 spurious candidates a minute -- while per-transaction status checks
-        # clear only ~20/min, so verification could never keep up and most rows would end
-        # `unresolved`. One 3 MB bulk read of an INDEPENDENT provider settles thousands at once:
-        # a transaction still sitting in another node's pool is definitively not dropped.
+        # Behaviour here is deliberate; see the private design notes.
         self.other: set[str] = set()
         self.other_ts = 0.0
         self.n_other_saved = 0      # candidates killed by the cross-check, costing no status call
@@ -327,11 +250,6 @@ class BtcMempoolTracker:
             self._verdict = {}
         checked = self._verdict
         cand = [t for t in self.left if t not in self.mined and t not in checked]
-        # SECOND-PROVIDER GATE. Kept, but MEASURED AS WEAK and worth saying so: it cleared only 6
-        # of 600 candidates in a 10-minute test, because our own e9 data shows mempool.space is
-        # very nearly a superset of blockstream.info (5,150 unique versus 205 at the same instant).
-        # A transaction absent from the larger pool is almost always absent from the smaller one,
-        # so this settles the rare case where the primary is the one at fault, and no more.
         if self.other:
             still_elsewhere = [t for t in cand if t in self.other]
             for t in still_elsewhere:
@@ -408,8 +326,6 @@ class BtcMempoolTracker:
         public service.
         """
         # Try the largest mempool first and fall back. Coverage is decided by which node
-        # answers, so a fallback is not merely resilience -- it is the difference between 93%
-        # and 34%, and the run should say which it got rather than quietly degrade.
         entries = None
         for name, u in (nodes if nodes is not None else NODE_RPCS):
             got, err = self._rpc(u, "getrawmempool", [True])
@@ -454,7 +370,6 @@ class BtcMempoolTracker:
                 }
         self.n_node_fees += got
         # The node's mempool size against ours, at the same instant. These disagree enormously
-        # (measured 31k against 88k) and no archive holds either side of the comparison.
         self.node_pool_size.append((time.time(), len(entries),
                                     len(self.pool) or len(self.pre_existing)))
         return got
@@ -566,14 +481,6 @@ def divergence() -> pd.DataFrame:
     views: dict[str, set[str]] = {}
     rows = []
 
-    # A FULL NODE is a third view, and a strikingly different one: measured 31k against
-    # mempool.space's 88k at the same instant. The HTTP providers are both large-mempool
-    # explorer nodes, so comparing only those understates how much node policy and peering
-    # actually diverge. `getrawmempool false` returns txids alone -- 1.0 MB gzipped in 0.4s,
-    # against 4.6 MB for the fee-bearing form -- which is cheap enough for this cadence.
-    # ALL the nodes, not just one. They disagree far more with each other than the explorer
-    # APIs do -- 6k / 29k / 81k against mempool.space's 86k -- and that spread IS the finding.
-    # txids only: 1.0 MB gzipped in 0.4s for publicnode, cheap enough for this cadence.
     for nname, nurl in NODE_RPCS:
         t0 = time.time()
         ids, nerr = None, None

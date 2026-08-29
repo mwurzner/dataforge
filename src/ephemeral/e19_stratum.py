@@ -1,46 +1,10 @@
-"""E19 -- Bitcoin mining-pool stratum jobs: what each pool is working on, right now.
+"""Mining pool stratum jobs, via a third-party public stream.
 
-WHAT THIS IS. Pools push `mining.notify` jobs to their miners every few seconds: the previous
-block hash they are building on, the coinbase they will claim, the merkle branches, and a
-clean-jobs flag telling miners to abandon previous work. Jobs are replaced constantly and no
-chain records them. Once a block is found, the templates every pool was working on -- including
-every pool that lost -- are gone.
+One row per job observed: pool, block being built on, coinbase, merkle branch count and timing.
 
-WHY IT PASSES THE CRITERION, verified 2026-08-28 before building. stratum.work streams these
-messages live and stores nothing: no archive, no export, no API for history, no retention policy.
-No historical stratum dataset was found anywhere. The measurement is visible in the first sample:
-two pools on the SAME previous block with `ntime` 25 seconds apart, and coinbase structures of
-114 against 218 characters.
-
-WHY WE READ A THIRD-PARTY STREAM RATHER THAN THE POOLS DIRECTLY. Connecting to pools ourselves
-works -- it was tested -- but it means holding persistent connections to commercial mining pools,
-consuming their infrastructure, contributing no hashrate, and selling the result. Braiins and
-ViaBTC terms are SILENT on that, and silence is not permission. stratum.work already does the
-collecting as a public transparency tool and documents `GET /api/stream` "allowing for custom
-integrations", so consuming it is the intended use and puts no load on any pool.
-
-    CREDIT, which is not optional. The collection is stratum.work's work (bboerst,
-    github.com/bboerst/stratum-work), and the idea is 0xB10C's. Any published form of this
-    dataset must say so prominently.
-
-    !! PUBLICATION IS GATED. Collecting for our own use raises nothing. REDISTRIBUTING or SELLING
-    a systematic extraction of a third party's compiled stream engages the EU sui generis
-    database right, which protects the compiler's investment independently of copyright -- and
-    the repo carries NO LICENCE granting redistribution. So this dataset is collected now
-    (history cannot be recovered later) and must NOT be added to any published product until
-    the maintainer has agreed in writing. It is deliberately absent from hf_push's PRODUCTS.
-
-WHAT IS STORED. One row per `mining.notify` observed: the pool, the job, what it builds on, and
-the timing. Merkle branches are kept as a COUNT plus their first entry rather than the full list
--- the list is large, and the branch count plus coinbase is what identifies a distinct template.
-The full coinbase is kept because pool identity and fee claim are read from it.
-
-HONEST LIMITS:
-  * This is stratum.work's view of the pools, not ours. Their collector's coverage, latency and
-    pool selection are inherited wholesale, including any gaps.
-  * `lat_ms` is THEIR measured latency from their collector to the pool, not ours, and not the
-    pool's own send time. It is a property of their vantage point.
-  * A dropped SSE connection loses jobs silently, so reconnects and gaps are counted and carried.
+ARCHIVE ONLY. This is a systematic extraction of a third party's compiled stream. Collecting it
+for internal use is fine; redistributing or selling it is not, absent written permission from
+the source. It is excluded from every published product in hf_push and must stay that way.
 """
 from __future__ import annotations
 
@@ -98,7 +62,6 @@ class StratumJobCollector:
             "coinbase_len": len(cb1) + len(cb2),
             "extranonce1": d.get("extranonce1"),
             "extranonce2_length": d.get("extranonce2_length"),
-            # stratum.work's OWN collector-to-pool latency, not ours. Their vantage point.
             "source_lat_ms": d.get("lat_ms"),
             "source_timestamp": d.get("timestamp"),
         })

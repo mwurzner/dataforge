@@ -47,18 +47,6 @@ ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, ne
 # RE-PINNED QUARTERLY, and that cadence is the compromise. A window frozen forever eventually
 # looks abandoned: a browser arriving in December sees August files and assumes the project died.
 # A window that moves weekly leaks the whole backlog. Re-pinning four times a year gives up about
-# 28 days of 365 (~8%) and keeps a recent week on display.
-#
-# The dates are EXPLICIT rather than computed. The entire point is that the sample does not move,
-# and date arithmetic against "today" is exactly how it would start moving again by accident.
-# Changing two strings four times a year cannot go subtly wrong.
-#
-#   NEXT RE-PIN: 2026-10-01, to a representative week of September.
-#   Pick a week showing both a busy and a quiet fee period, not seven flat days.
-#
-# The repo does not look dead between re-pins: the run manifest publishes in full on every run,
-# so HF's "updated" timestamp stays current and the coverage table shows collection through
-# yesterday even while the sample data itself is fixed.
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
 SAMPLE_START = os.environ.get("DF_SAMPLE_START", "2026-08-25")
 SAMPLE_END = os.environ.get("DF_SAMPLE_END", "")
@@ -108,12 +96,7 @@ WINDOWED = {
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
                 "b5_dormancy", "universe",
                 # e19 is DELIBERATELY archive-only, and this is a legal gate rather than an
-                # oversight. The stratum jobs are collected from stratum.work's public SSE feed,
-                # which is their compiled database. Collecting it for our own use raises nothing;
-                # REDISTRIBUTING or SELLING a systematic extraction engages the EU sui generis
-                # database right, and the source repo carries no licence granting redistribution.
-                # Do not move this into PRODUCTS until the maintainer (bboerst) has agreed in
-                # writing, and even then credit him and 0xB10C prominently.
+                # Behaviour here is deliberate; see the private design notes.
                 "e19_stratum_jobs"}
 
 _SHARED_TAIL = """
@@ -129,164 +112,120 @@ ODC-BY: use it freely, credit "DataForge (dataforge-labs)". Questions and reques
 history via the discussions tab.
 """
 
-MINING_CARD = '''# Bitcoin mining pool templates
+MINING_CARD = '''# Bitcoin mining pool templates and block propagation
 
-What each mining pool is working on, second by second. Pools push `mining.notify` jobs to their
-miners: the block they are building on, the coinbase they will claim, the merkle branches, and a
-clean-jobs flag meaning "drop everything, there is a new block". Jobs are replaced every few
-seconds. When a block is found, every losing pool's template is gone, and no chain records it.
+What each mining pool is building on, and how quickly the network learns a new block exists.
 
-## The measurement
+Pools issue work to their miners describing the block they are extending, the coinbase they will
+claim, and whether previous work should be abandoned. That work is replaced every few seconds.
+Once a block is found, the templates every pool was building are gone.
 
-Pools working on the **same** previous block do not agree. One observation across six pools:
-
-| pool | nTime | coinbase length |
-|---|---|---|
-| slushpool | 6a918a58 | 318 |
-| braiins | 6a918a62 | 318 |
-| f2pool | 6a918a67 | 980 |
-| viabtc | 6a918a70 | 652 |
-| antpool | 6a918a71 | 848 |
-| poolin | 6a918a71 | 516 |
-
-**25 seconds of nTime spread**, and coinbase structures from 318 to 980 characters. That is who
-saw the new block first, and how differently each pool built on it. Note rows 1 and 2: the same
-operator on two endpoints, 10 seconds apart.
-
-## What is in here
+## Contents
 
 | name | one row is |
 |---|---|
-| `e20_stratum_jobs_direct` | one `mining.notify` from one pool: the block it builds on, its nTime, coinbase, merkle branch count and clean-jobs flag |
-| `e21_btc_block_propagation` | one peer announcing one block to us, timestamped -- the propagation curve, peer by peer |
-| `e21_btc_p2p_peers` | one peer we connected to: user agent, services, handshake outcome |
+| `e20_stratum_jobs_direct` | one job from one pool: the block it extends, its nTime, coinbase, merkle branch count and clean-jobs flag |
+| `e21_btc_block_propagation` | one peer announcing one block, timestamped |
+| `e21_btc_p2p_peers` | one peer connected to: user agent, services, whether it completed a handshake |
 
-## Block propagation
+## Templates
 
-The second half of the story. Pool templates say what miners are building on; propagation says how
-fast the network learned there was something new to build on. We connect to ~120 Bitcoin peers as
-an ordinary node and record when each of them announces each new block.
+Pools building on the same block do not agree. In one observation across six pools, nTime spread
+across 25 seconds and coinbase structures ranged from 318 to 980 characters. Two endpoints run by
+the same operator differed by 10 seconds.
 
-One observation across four blocks:
+`pool` is the endpoint connected to rather than an identity inferred from the data. `operator`
+collapses endpoints belonging to the same operator, and rows should usually be grouped on it.
+
+## Propagation
+
+Connections are held to roughly 120 peers and each announcement of a new block is timestamped.
+Sorting one block's rows by `received_ts` gives its propagation curve.
+
+Across four blocks in one window:
 
 | peers | first to median | full spread |
 |---|---|---|
 | 32 | 0.39s | 3.74s |
 | 31 | 0.27s | 2.00s |
-| 33 | 0.45s | **52.37s** |
+| 33 | 0.45s | 52.37s |
 
-Half the network reaches us within about 0.4 seconds. The tail is the interesting part: in the
-third block one peer was **52 seconds** behind. Nothing on chain records that a peer was ever that
-far behind, because the block itself carries only the miner's claimed timestamp.
-
-Collected over Bitcoin's own P2P protocol, which is permissionless by design -- we participate as
-a node, exactly as the protocol intends, with `fRelay=0` so peers do not send us transaction
-announcements we would discard.
-
-## How it was collected
-
-Directly from the pools' own stratum endpoints, one read-only connection each, subscribing as an
-observer and never submitting a share. `pool` is the host we connected to rather than an identity
-decoded from data, so provenance is exact. `operator` collapses hostnames belonging to one pool --
-`braiins` and `slushpool` are the same operator and should usually be treated as one.
-
-**No Bitcoin address is used anywhere in this collection.** Two pools serve jobs on subscribe
-alone; four accept a plain worker name. Two further pools (solo.ckpool.org, public-pool.io)
-require a valid payout address and are therefore EXCLUDED rather than handed an invented one.
+Half the peers are reached within about half a second. The tail is the interesting part: in the
+third block one peer was 52 seconds behind. Nothing on chain records that, because a block
+carries only the timestamp its miner claimed.
 
 ## Before you build on this
 
-- **nTime is the pool's own clock**, not our receive time, and pools do not all update it on the
-  same cadence. It is a good indicator of when a pool rebuilt its template and a poor stopwatch.
-  For arrival ordering use `observed_ts`, which is ours and consistent across pools.
-- **`observed_ts` carries our network latency to each pool**, which differs by pool and by
-  region. Differences of tens of milliseconds between pools are not meaningful; differences of
-  seconds are.
-- **Six pools, five operators.** This is not the whole network, and pools running regional
-  endpoints may serve different templates elsewhere than the one we connect to.
-- **A dropped connection loses jobs silently.** `pool_reconnects` and `pool_connect_failures` are
-  carried on every row so a gap can be told from a quiet pool.
-- Merkle branches are stored as a count plus the first entry. The count plus the coinbase
-  identifies a distinct template; the full branch list is large and mostly redundant.
-- **Propagation times are OUR clock and include our latency to each peer**, which varies with
-  geography. Differences of milliseconds between peers are partly network distance to us;
-  differences of seconds are real. `peer_addr` is kept so you can control for it.
-- **One vantage point.** We see when peers told US, not when they learned. Academic monitor nodes
-  connect to all ~27,000 reachable peers; we hold ~120. Treat this as a sample of the network,
-  never as the network.
-- **A peer that disconnects stops announcing**, which looks like slowness. `e21_btc_p2p_peers`
-  carries handshake state per peer so a gap can be told from a silence.
-- `clean_jobs = true` is the interesting flag: it means the pool has switched blocks. Sorting
-  those by `observed_ts` gives the propagation order across pools for each new block.
+- Propagation times are ours and include network distance to each peer, which varies with
+  geography. Differences of milliseconds are partly distance; differences of seconds are not.
+  `peer_addr` is retained so this can be controlled for.
+- One vantage point, roughly 120 peers out of tens of thousands reachable. This is a sample of
+  the network, not the network.
+- A peer that disconnects stops announcing, which resembles slowness. `e21_btc_p2p_peers` carries
+  handshake state so a gap can be told from a silence.
+- nTime is the pool's own clock and pools do not all update it on the same cadence. It indicates
+  when a pool rebuilt its template. For arrival ordering use `observed_ts`, which is consistent
+  across pools.
+- Six pools across five operators. Pools running regional endpoints may serve different work
+  elsewhere.
+- Merkle branches are stored as a count and first entry. The count with the coinbase identifies a
+  distinct template; the full list is large and mostly redundant.
+- `clean_jobs = true` marks a pool switching blocks. Sorting those by `observed_ts` gives the
+  order in which pools reacted.
 '''
 
 ATTESTATION_CARD = '''# Ethereum attestation pool
 
-Attestations this node saw, against the attestations that reached a block. On chain you can see
-that a validator's attestation is missing. You cannot see whether it was never produced, produced
-but never propagated, or propagated and then never packed by a proposer. That distinction lives
-only in the pool, and the pool is not kept by anyone.
+Attestations seen waiting, against attestations that reached a block.
 
-The consensus API is explicit about what it serves: attestations "known by the node but not
-necessarily incorporated into any block". Every provider documents that endpoint as real-time,
-and none archives it. Measured churn on a single 15-second gap: 118 attestations left the pool
-and 272 appeared.
+On chain you can see that a validator's attestation is missing. You cannot see whether it was
+never produced, produced but never propagated, or propagated and never included. That difference
+is only visible while the attestation is still pending.
 
-## What this is NOT
-
-Attester effectiveness is already well served and you should use the existing tools for it.
-[Rated](https://rated.network) and [beaconcha.in](https://beaconcha.in) both publish participation
-rate, correctness and inclusion delay, all derived from on-chain data and all reconstructable from
-an archive node. None of that is here, because none of it is scarce.
-
-What is here is the counterfactual half: the attester slots that entered this node's pool and
-never reached a block.
-
-## What is in here
+## Contents
 
 | name | one row is |
 |---|---|
-| `e18_attestation_pool` | one slot: attester slots seen in the pool, attester slots included on chain, and the difference |
+| `e18_attestation_pool` | one slot: attester slots seen waiting, attester slots included, and the difference |
+
+## What this is not
+
+Attester effectiveness is well served elsewhere. Participation rate, correctness and inclusion
+delay are all derivable from chain data and several public tools publish them. None of that is
+here, because none of it is scarce.
 
 ## Reading it
 
-`attesters_seen_in_pool` is the population count of the union of aggregation bitfields observed
-for that slot, summed over committee groups. `attesters_included` is the same count taken from
-the blocks that carried attestations for that slot. `attesters_net_never_included` is the first
-minus the second.
+`attesters_seen_in_pool` counts attester slots observed waiting for that slot.
+`attesters_included` counts those that reached a block. `attesters_net_never_included` is the
+first minus the second.
 
-**That figure is signed on purpose, and negative values are real.** A proposer can include
-attestations this node never held, so a negative number means the network carried more than we
-saw. Clamping it at zero would hide exactly the propagation asymmetry the column exists to show.
+The difference is signed, and negative values are ordinary: a proposer can include attestations
+this vantage point never held, so a negative number means the network carried more than was seen
+here. Clamping it at zero would hide the asymmetry the column exists to show.
 
-**Read the median, not the total.** Across 1,319 window-closed slots the aggregate gap is −2.0%,
-but that is dragged by a tail: the **median slot is −0.07%**, p10 is −2.77%, and p90 is −0.01%.
-So a typical slot agrees with the chain almost exactly, and a minority account for nearly all of
-the difference — which is the interesting population, and the reason the aggregate alone would
-mislead you.
+Read the median rather than the total. Across 1,319 slots with a fully observed inclusion window
+the aggregate gap is -2.0%, but that is pulled by a tail. The median slot is -0.07%, p10 is
+-2.77% and p90 is -0.01%. A typical slot agrees with the chain almost exactly and a minority
+accounts for nearly all of the difference.
 
-One more thing the data says plainly: **0.0% of slots show us seeing MORE than the chain.** The
-gap is one-directional, exactly as a single vantage point should be. If you ever see a positive
-value here in quantity, suspect the collector before the network.
+No slot has yet shown more attesters here than on chain. If you see positive values in quantity,
+suspect the collection before the network.
 
 ## Before you build on this
 
-- **One node's view.** This is what a single consensus client held, not what the network held. An
-  attestation absent here may have been present elsewhere. Treat it as a lower bound on what
-  existed, never as a claim about the network. This is the same limitation as our mempool
-  datasets, stated the same way.
-- **It counts attester slots, not validators.** An SSZ bitfield's population count tells you how
-  many attester slots it represents, not which validators they were. Resolving identity needs
-  committee assignments (~8 MB per epoch, ~1.8 GB/day) fetched purely to map bit positions, which
-  is not collected. So this answers "how many were left out", not "was it me".
-- **The pool holds roughly the last 50 slots**, about ten minutes. An attestation that arrived and
-  was included between two polls is invisible to us. `n_polls_seen` is on every row so a
-  well-observed slot can be told from a glimpsed one; low values mean low confidence.
-- **A failed block fetch overstates the gap**, because uncounted inclusions look like exclusions.
-  `block_fetch_failures` and `missed_slots_seen` are carried on every row rather than smoothed
-  away. A missed slot genuinely has no block and is counted separately from a fetch that failed.
-- Slots near the end of a collection window are finalised early, so their inclusion counts are
-  incomplete by construction. Prefer slots with a high `n_polls_seen`.
+- One vantage point. This is what a single consensus client held, not what the network held. An
+  attestation absent here may have been present elsewhere. Treat it as a lower bound.
+- It counts attester slots, not validators. A bitfield population tells you how many attester
+  slots it represents, not which validators they were. This answers how many were left out, not
+  whether a particular validator was.
+- Attestations remain visible for roughly ten minutes. One that arrived and was included between
+  two observations is invisible here. `n_polls_seen` is on every row; low values mean low
+  confidence.
+- `window_closed` marks slots whose inclusion window was fully observed. Rows without it have
+  incomplete inclusion counts by construction. Filter on it before drawing conclusions.
+- Slots near the end of a collection window are finalised early and will show `window_closed`
+  as false.
 '''
 
 PRODUCTS = {
@@ -321,117 +260,79 @@ PRODUCTS = {
         "size": "1M<n<10M",
         "body": """# Bitcoin mempool lifecycle
 
-What happens to a transaction between being broadcast and being mined: when we first saw it, how
-long it waited, what fee it paid, and whether it was ever mined at all.
+Transactions from the moment they appear in the mempool to whatever happens to them: mined,
+still waiting, or dropped without ever reaching a block.
 
-A confirmed transaction keeps its body forever but loses its timing, and one that is never mined
-leaves no trace at all. We checked this on Bitcoin before collecting anything: the public
-first-seen lookup answers while a transaction is unconfirmed and returns 0 once it is mined,
-whether that was a day ago or a year ago. So it gets recorded as it happens or not at all.
+A confirmed transaction keeps its contents forever but loses its timing. One that is never mined
+leaves no record at all. Both are recorded here as they happen.
 
-Bitcoin is the point of this repo. Litecoin runs the same collector. Ethereum is included as a
-second observation, but if you want Ethereum specifically, the
-[Flashbots Mempool Dumpster](https://github.com/flashbots/mempool-dumpster) publishes the same
-measurement daily under CC-0, from a wider node network and going back to September 2023. Theirs
-is better than ours; use it.
-
-## What is in here
+## Contents
 
 | name | one row is |
 |---|---|
 | `e8_btc_mempool_lifecycle` | a Bitcoin transaction: first seen, fee rate, mined height, blocks waited, fate |
-| `e9_btc_mempool_divergence` | one provider's pending-set size and overlap with another, at an instant |
-| `e11_ltc_mempool_lifecycle` | the same as e8, for Litecoin (single provider, no cross-check) |
-| `e15_fee_estimators` | one fee estimate from one of five providers, at one confirmation target |
-| `e1_mempool_minutely` | one minute of Ethereum mempool activity: arrivals, fates, dwell quantiles |
-| `e1_mempool_dropped` | an Ethereum transaction that was never mined, in full |
-| `e3_mempool_divergence` | one Ethereum node's pending view against three others |
-| `e0_run_manifest` | one collection window: polls, failures, coverage counters |
+| `e9_btc_mempool_divergence` | one view of the pending set at one instant, sized and compared against the others |
+| `e11_ltc_mempool_lifecycle` | the same, for Litecoin |
+| `e15_fee_estimators` | one fee estimate from one provider at one moment, with its target |
+| `e1_mempool_lifecycle` | an Ethereum transaction seen pending |
+| `e1_mempool_minutely` | one minute of Ethereum mempool activity |
+| `e1_mempool_dropped` | an Ethereum transaction that was never mined |
+| `e3_mempool_divergence` | Ethereum pending-set comparison across views |
+
+## Fee rate coverage
+
+`fee_rate_sat_vb` is present on a portion of rows and that portion changes over time. It is
+sampled, never estimated: a guessed fee rate would ruin the analyses the column exists for.
+
+Coverage by day, as a share of transactions observed arriving (`pre_existing == False`):
+
+| date | coverage |
+|---|---|
+| 2026-08-25 | none |
+| 2026-08-26 | ~4% |
+| 2026-08-27 | ~14% |
+| 2026-08-28 | ~16% early, ~67% late |
+| 2026-08-29 onward | ~67% |
+
+Coverage of transactions already pending when a collection window opened moved from about 1% to
+about 99% on 2026-08-28. Dropped rows inherit that figure and reached 94% on 2026-08-29.
+
+Partitions from 2026-08-29 are substantially denser than earlier ones. Compute coverage per
+partition rather than assuming a constant:
+
+```python
+obs = df[~df.pre_existing.astype(bool)]
+coverage = obs.fee_rate_sat_vb.notna().mean()
+```
+
+Rows without a fee rate are complete in every other respect, so they remain usable for lifecycle
+work. Only fee-conditioned analysis is affected.
+
+## Reading the fate column
+
+`dropped` means the transaction was confirmed absent from the chain, absent from every pending
+view held, and stayed absent through a debounce period. It is not inferred from a single
+observation. `unresolved` means it went missing but could not be confirmed, and is never counted
+as a drop.
+
+Bitcoin `fate = "dropped"` begins 2026-08-26. Earlier partitions contain no drops because a
+defect made them impossible to record, not because none occurred.
 
 ## Before you build on this
 
-Most of these came out of getting something wrong first.
-
-- `first_seen_ts` is when WE saw it, on our clock, from our own polling. The network saw it a
-  little earlier. We never copy a provider's own first-seen field.
-- Rows with `pre_existing = true` were already pending when a window opened. Their real arrival
-  time is unknowable, so `first_seen_ts` is null there rather than a made-up value.
-- Bitcoin `fate = "dropped"` starts 2026-08-26. Before that, a bug made drops impossible to
-  record: the status endpoint reports `confirmed: false` for a replaced transaction exactly as it
-  does for a waiting one, and we read that as proof it was still pending. Earlier partitions are
-  kept as collected rather than rewritten.
-- We only call something dropped once it is missing from the chain, missing from two providers'
-  pools, and missing for ten polls running. Weaker tests do not work: a plain poll-to-poll diff
-  invented 642 "drops" in 200 seconds and every one we checked was still in the mempool.
-- `fee_rate_sat_vb` is PARTIAL, and its coverage IMPROVES over the life of the dataset. It is
-  sampled from the recent-arrivals feed, which returns only the ten newest transactions per call,
-  so coverage is bounded by how often we call it. It is never estimated for the rest, because a
-  guessed fee rate would ruin the analyses the column exists for.
-  Measured coverage, as a share of arrivals we actually observed (`pre_existing == False`):
-  **2026-08-25 none, 2026-08-26 ~4%, 2026-08-27 ~14%, 2026-08-28 ~16% early, ~75% late.**
-  Coverage of PRE-EXISTING transactions -- which is what dropped rows inherit -- moved from
-  **~1% to ~93%** on 2026-08-28. Partitions from 2026-08-29 onward are far denser than anything
-  earlier, and the gap is now large enough that pooling them unexamined would be a mistake.
-  Four things held it down, all fixed on 2026-08-28: fee capture did not exist on the first day;
-  the quote collectors shared a thread with the sampler and blocked it for ~40 minutes of every
-  4.5-hour run; the sampler's intended 2-second cadence never actually ran, because it was
-  checked inside a loop that sleeps 5 seconds; and fees were fetched one transaction at a time
-  when a full node returns its ENTIRE mempool, with an exact fee and vsize per entry, in a single
-  request. That last one is what mattered, and the lesson is which node you ask: public Bitcoin
-  RPC nodes hold wildly different mempools, and one with a 4 GB `maxmempool` covers 93% of our
-  tracked set in a single call where a 256 MB node covers 34%.
-  **Even repaired, 100% is not attainable, and the reason is worth understanding before you rely
-  on this column.** The feed returns only the TEN NEWEST transactions per call, so capture is
-  capped at 10 per poll however fast we ask. Measured Bitcoin arrival rates ran between 4.3/s and
-  11.0/s within a single hour. At a 2-second cadence the ceiling is 5/s, which is above the quiet
-  rate and well below the busy one -- so coverage is itself a function of network congestion, and
-  is LOWEST exactly when the mempool is most interesting. Treat the sampled set as a sample, and
-  do not assume it is representative across congestion regimes without checking.
-  DO NOT take these figures on trust -- they are computable from the data itself, and any
-  analysis sensitive to coverage should compute them per partition rather than assume a constant:
-  ```python
-  obs = df[~df.pre_existing.astype(bool)]
-  coverage = obs.fee_rate_sat_vb.notna().mean()
-  ```
-  Rows without a fee rate are complete in every other respect (first seen, dwell, fate, blocks
-  waited), so they remain usable for lifecycle work; only fee-conditioned analysis is affected.
-- **`fee_rate_sat_vb` is effectively ABSENT on dropped rows (~1%), and this is structural.**
-  Every dropped transaction observed so far was already in the mempool when its run began
-  (`pre_existing == True`), which follows from the mechanism: a transaction we watch from arrival
-  is mined or still pending within a 4.5-hour window, whereas eviction takes far longer, so only
-  transactions that predate the run live long enough to be dropped. Fees come from the
-  recent-ARRIVALS feed, which by definition never saw them.
-  Recovering the fee afterwards does not work, and this was tested rather than assumed: a
-  transaction that leaves the mempool unmined returns **HTTP 404 immediately** from `/tx/{id}`.
-  A run's confirmed drops were probed and **0 of 147** were retrievable. The provider forgets
-  them at once, so there is no window in which to ask.
-  Related trap, worth knowing if you query the API yourself: `/tx/{id}/status` answers
-  `{"confirmed": false}` for txids that CANNOT EXIST (all-zeros, all-f's were both tested), so
-  that field distinguishes "not in a block" and nothing more. Our drop classification does not
-  rest on it -- pool membership is the discriminator -- but a naive reading of it would be wrong.
-- Four columns come from a full Bitcoin node's mempool rather than an explorer API, and are
-  **null for transactions that node did not hold** (~32% coverage, the node's share of the
-  tracked set). None of them survives confirmation or eviction, which is why they are collected:
-  `node_first_seen_ts` (that node's own first-seen clock, an independent check on ours),
-  `rbf_signalled` (BIP-125 replaceability as live mempool state), and `ancestor_count` /
-  `descendant_count` (unconfirmed chains, which is how CPFP fee-bumping appears).
-  A caveat on `node_first_seen_ts` that we have not explained: on transactions where both clocks
-  exist, ours is a median ~7,000s LATER than the node's. Some of that is our polling interval and
-  some is rebroadcast, but not all of it, so treat the two clocks as different measurements
-  rather than one corrected version of the other.
-- A fee rate of exactly 0 is real and rare, about 1 in 6,000 of the sampled arrivals, and most of
-  those we have seen went on to confirm. Filter on `fee_rate_sat_vb > 0` if a zero would break
-  your arithmetic, rather than treating it as a decode fault.
-- Mempools are node-local, and how long a node keeps things is its own choice rather than a
-  protocol rule. Ours served 115-day-old entries where Bitcoin Core would have evicted after 336
-  hours. `e9` tracks how far apart two providers are, usually several thousand transactions.
-- Bitcoin dwell times are long. Around 10 minutes for transactions that confirm quickly, but the
-  pool also holds a standing backlog whose median age is over 100 days. That is Bitcoin's fee
-  market, not a collection error.
-- Fee estimators disagree much more than their marketing suggests: one sample showed a 6.7x
-  spread across five providers on the same six-block target. Targets are normalised to a block
-  count and the raw payload field is kept per row, so you can check that rather than trust it.
-- Ethereum is stored as per-minute aggregates plus full rows for never-mined transactions.
+- Pending sets are node-local. What one view holds is not what the network holds, and retention
+  is a configuration choice rather than a protocol rule. `e9` exists to size that disagreement,
+  and it is large: at one instant the views ranged from about 6,000 to about 87,000 pending
+  transactions, with only 7% common to all of them.
+- Dropped rows carry a fee rate far less often than mined rows. Every drop observed so far was
+  already pending when its window opened, and fee sampling favours arrivals.
+- A fee rate of exactly 0 is real and rare. Filter on `fee_rate_sat_vb > 0` if a zero would
+  break your arithmetic rather than treating it as a decode fault.
+- Timestamps are ours, taken at observation. They are not consensus timestamps and carry our
+  network distance to whatever served the data.
+- Ethereum rows are included for comparison. If Ethereum is your subject, the Flashbots Mempool
+  Dumpster publishes the same measurement daily under CC-0 from a wider node set and a longer
+  history. Theirs is better; use it.
 """,
     },
     "crypto-execution-costs": {
@@ -445,52 +346,47 @@ Most of these came out of getting something wrong first.
         "size": "10K<n<100K",
         "body": """# Crypto execution costs
 
-What it actually costs to move money on-chain, recorded as it was quoted. Three angles: swap
-quotes from competing DEX aggregators, retail fiat on-ramp quotes, and how long an L2 takes to
-turn a sequencer promise into something L1 confirms.
+What it costs to trade, quoted at the moment someone would have traded.
 
-Quotes are computed per request against live state and stored by nobody. The live comparison is
-free to anyone at the moment they ask; a record of what was quoted over time is not, as far as we
-could find.
+Executed trades are on chain forever. Quotes for trades nobody placed are computed on demand and
+kept by nobody, so they only exist if they were recorded when they were served.
 
-## What is in here
+## Contents
 
 | name | one row is |
 |---|---|
-| `e10_quote_benchmark` | one swap quote from LI.FI, KyberSwap or CoW, at a fixed size, fee split out |
-| `e17_perp_depth` | one order-book snapshot from a perp DEX: spread, level counts, and resting notional within 5/10/25/50/100 bps of mid |
-| `e16_dex_routes` | one leg of the route a router chose: venue, pool, amount, and how many venues the trade was split across |
-| `e12_onramp_quotes` | one retail fiat on-ramp quote, buy or sell |
-| `e14_l2_preconf` | an L2 heartbeat (unsafe vs safe head) or a sequencer promise the chain replaced |
-| `e0_run_manifest` | one collection window: polls, failures, coverage counters |
+| `e10_quote_benchmark` | one swap quote at a fixed size, with the provider fee separated out |
+| `e16_dex_routes` | one leg of a route a router chose: venue, pool, amount, and how many venues the trade was split across |
+| `e17_perp_depth` | one order book snapshot: spread, level counts, resting notional within fixed distances of mid |
+| `e12_onramp_quotes` | one fiat on-ramp quote |
+| `e14_l2_preconf` | an L2 sequencer promise, and whether it held |
+
+## Reading it
+
+Quotes are what a provider served, which is not what you would necessarily have filled. Provider
+fees are separated from price so that a fee policy is not mistaken for routing quality.
+
+`e16_dex_routes` maps where routable liquidity sits rather than where volume went, and it
+surfaces venues too small to appear in volume rankings. The split widens sharply with size: one
+observation put the same pair through a single venue at small size and ten venues at large size.
+
+`e17_perp_depth` stores book shape rather than raw ladders, as cumulative resting notional within
+a band of mid. Where a spread is wider than a band, that band is correctly zero, which happens
+often on thinner markets.
 
 ## Before you build on this
 
-- `e16_dex_routes` records the route a router picked for a trade nobody placed. Executed swaps
-  are on-chain forever; a quoted route for a hypothetical size is computed on demand and kept by
-  nobody, so this maps where routable liquidity sits rather than where volume went. It surfaces
-  venues too small for volume rankings, and the split widens sharply with size: one round put
-  WBTC/USDC through a single venue at 0.01 BTC and ten venues at 10 BTC. Only KyberSwap exposes
-  a leg breakdown; the others contribute the venue name alone.
-- `e17_perp_depth` covers Aevo and Paradex, second-tier perpetual DEXs that no depth archive
-  carries -- Tardis lists 64 exchanges and includes dydx, dydx-v4 and hyperliquid but neither of
-  these. Neither venue serves its own history either. Rows are SNAPSHOTS at the poll interval,
-  not a tick-level book, so a move that reverses between polls is invisible. Depth is cumulative
-  resting notional within a band of mid; where the spread is wider than the band the value is
-  correctly zero, which happens often on the thinner markets.
-- Quote rows are what each aggregator served, which is not what you could have filled. One round
-  has LI.FI 5% above the other two; read outliers as provider behaviour rather than free money.
-- LI.FI applies a fixed fee of about 25 bps at every size. It is split into `fee_usd` precisely
-  so its pricing policy is not mistaken for worse routing. Read price and fee together.
-- The on-ramp panel is thin: Mercuryo answers full quotes without a key, Ramp gives a reference
-  price and fee bounds, and MoonPay, Transak, Guardarian and Mt Pelerin all require keys. It is
-  1.5 providers, not a market survey.
-- In `e14`, only the `violation` rows are hard to get elsewhere. The heartbeat lag can be rebuilt
-  after the fact from L2 block timestamps and L1 batch times, both of which are permanent, so
-  treat heartbeats as coverage attestation rather than as a scarce series.
-- Optimism's public endpoint serves a stale `safe` tag (tens of millions of blocks behind, where
-  Base is a dozen). Rows carry `safe_tag_plausible` so that shows up instead of being published
-  as a property of the rollup.
+- Not every provider answers every request. Refusals and rate-limit skips are written as explicit
+  error rows rather than omitted, so a provider that was unavailable is distinguishable from one
+  that had nothing to offer. Check the `error` column before treating absence as meaning.
+- One provider is queried on a subset of pairs. Its coverage is deliberately narrower than the
+  others and should not be read as a market-wide view.
+- Only some routers expose a leg breakdown. Rows from the others carry the venue name alone,
+  which is why `pool` and `swap_amount_raw` are frequently null.
+- Depth rows are snapshots at the observation interval, not a tick-level book. A move that
+  reverses between observations is invisible.
+- `e14_l2_preconf` is mostly an attested absence. Violations are rare and the value is in the
+  zeros being credible, which requires the coverage rows alongside them.
 """,
     },
     "remittance-pricing-panel": {
@@ -500,37 +396,38 @@ could find.
         "tags": ["remittance", "exchange-rates", "fintech", "payments", "banking",
                  "foreign-exchange", "time-series", "finance"],
         "size": "10K<n<100K",
-        "body": """# Cross-border remittance pricing
+        "body": """# Remittance pricing panel
 
-What it costs to send money across nine major corridors, quoted per provider, several times a
-day. Each round captures 8 to 22 providers per corridor, including Wise, Western Union, PayPal,
-Xoom, WorldRemit, Instarem and a range of retail banks, with the rate, the fee, and the amount
-that would actually arrive.
+What sending money across borders actually costs, quoted corridor by corridor.
 
-The World Bank surveys remittance prices quarterly by mystery shopping. We could not find a
-high-frequency record of provider pricing anywhere, and quotes change far faster than quarterly.
+Published averages are periodic and aggregated. These are the individual quotes as offered, at
+the moment they were offered.
 
-Worst-versus-best spread on the same transfer runs from 2.5% to 8.8% depending on the corridor.
-
-## What is in here
+## Contents
 
 | name | one row is |
 |---|---|
-| `e13_remittance_quotes` | one provider's quote on one corridor: rate, fee, amount received, shortfall against the best in that round |
-| `e0_run_manifest` | one collection window: polls, failures, coverage counters |
+| `e13_remittance_quotes` | one provider quoting one corridor: rate, fees, and amount received |
+
+## Reading it
+
+Twenty corridors covering the largest remittance lanes plus intra-European pairs where bank
+pricing is widest. Corridors added later begin later; the manifest records when each dataset
+started.
+
+The amount received is the figure that matters. Rate and fee split differently between providers
+and comparing on rate alone will mislead you.
 
 ## Before you build on this
 
-- The source is Wise's own public comparison service. Which competitors appear in a corridor is
-  Wise's choice, competitor quotes can lag (see `date_collected` where present), and the
-  publisher has an obvious interest in looking cheap. The bias is at least constant and visible,
-  and `is_wise_own_quote` marks their own rows. For what it is worth, the feed does publish Wise
-  losing: it was 3% behind Xoom on USD to MXN in our first round.
-- The Wayback Machine holds occasional captures of Wise's comparison pages and at least one of
-  the comparison API, from 2022. Those are scattered single points rather than a panel, so this
-  is denser than anything that exists rather than the only record of it.
-- `shortfall_vs_best_pct` is computed within a round, so it compares providers quoted at the same
-  moment rather than against a daily benchmark.
+- The source is a comparison service run by one of the providers being compared. Which
+  competitors appear in a corridor is that provider's choice, competitor quotes can lag, and the
+  publisher has an obvious interest in appearing cheap. The bias is at least constant and
+  visible.
+- Quotes are indicative. A real transfer may differ, and some providers apply limits or
+  verification steps that a quote does not reflect.
+- Coverage per corridor varies with how many competitors the source lists, which changes over
+  time.
 """,
     },
 }

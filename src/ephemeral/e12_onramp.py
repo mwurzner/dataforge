@@ -41,8 +41,6 @@ HDRS = {"User-Agent": "dataforge/1.0", "Accept": "application/json"}
 # (fiat, fiat_amount) ladder for buys; (asset, crypto_amount) for sells. Small on purpose:
 # ~14 requests per round at the e10 cadence is ordinary client traffic.
 BUYS = [("EUR", 100), ("EUR", 1000), ("USD", 100), ("USD", 1000)]
-# Providers cannot be widened: the other seven are keyed (probed and recorded), so asset
-# breadth is the only axis available here.
 BUY_ASSETS = ["BTC", "ETH", "USDT", "USDC", "SOL"]
 SELLS = [("BTC", 0.01), ("ETH", 0.5)]
 SELL_FIAT = "EUR"

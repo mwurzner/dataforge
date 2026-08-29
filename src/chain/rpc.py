@@ -109,10 +109,6 @@ class RPC:
     # The free Base endpoint enforces "maximum 10 calls in 1 batch". Exceeding it returns a
     # single error object with id=null, which is trivially mistaken for "every call returned
     # nothing" -- it silently produced 43 phantom "unsupported" pools before this was caught.
-    # Measured on the free endpoints (2026-07-14): a batch of 10 typically has only ~5 calls
-    # answered, the rest returning "over rate limit"; sustained throughput is ~2 calls/sec.
-    # Small batches + generous retries converge reliably; large batches mostly get thrown away.
-    # A free-tier API key (BASE_RPC_URL) removes this ceiling entirely and is 100x faster.
     def __init__(self, url: str | None = None, batch_size: int | None = None,
                  timeout: int = 45, max_retries: int = 10, min_interval: float | None = None,
                  urls: list[str] | None = None, private: bool | None = None):
@@ -142,9 +138,6 @@ class RPC:
         # free: 3; mainnet.base.org: 10), so capability detection across a POOL of endpoints is
         # both fragile and pointless. Concurrency works identically everywhere.
         self.batching: bool | None = False
-        # Measured on the dRPC free tier (2026-07-14): a token-bucket limiter yields ~5-7 req/s
-        # sustained; 8 workers sits at that ceiling without collapsing into 429 storms. Higher
-        # concurrency does not go faster, it just converts throughput into retries.
         self.concurrency = 8 if self.private else 4
         self._last_call = 0.0
         self.session = requests.Session()
