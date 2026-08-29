@@ -25,6 +25,7 @@ import pandas as pd
 
 DATASET = "e21_btc_block_propagation"
 PEER_DATASET = "e21_btc_p2p_peers"
+FLOOR_DATASET = "e21_btc_relay_floor"
 
 MAGIC = bytes.fromhex("f9beb4d9")          # mainnet
 PROTOCOL_VERSION = 70016
@@ -103,6 +104,7 @@ class BlockPropagationCollector:
         self.bufs: dict[tuple, bytes] = {}
         self.state: dict[tuple, dict] = {}
         self.rows: list[dict] = []
+        self.floor_rows: list[dict] = []
         self.seen: set[tuple] = set()
         self.n_handshakes = 0
         self.n_connect_fail = 0
@@ -163,6 +165,17 @@ class BlockPropagationCollector:
                         _msg("sendcmpct", struct.pack("<BQ", 1, 2)))
                 except Exception:
                     self._drop(key)
+        elif cmd == "feefilter" and len(payload) >= 8:
+            # BIP133. The peer's own minimum relay fee: below this it will not even forward a
+            # transaction, let alone mine it. Broadcast on connect and again whenever the floor
+            # moves, stored by nobody, and it is what decides whether a cheap transaction can
+            # cross the network at all. Peers send it whether or not we asked for transaction
+            # relay -- measured on both settings before this was added.
+            self.floor_rows.append({
+                "observed_ts": time.time(),
+                "peer_addr": f"{key[0]}:{key[1]}",
+                "min_relay_fee_sat_kvb": struct.unpack_from("<q", payload, 0)[0],
+            })
         elif cmd == "ping":
             try:
                 self.conns[key].sendall(_msg("pong", payload))
@@ -309,6 +322,14 @@ class BlockPropagationCollector:
 
     def frame(self) -> pd.DataFrame:
         return pd.DataFrame(self.rows)
+
+    def floor_frame(self) -> pd.DataFrame:
+        """One row per feefilter received. A peer appears repeatedly as its floor moves."""
+        df = pd.DataFrame(self.floor_rows)
+        if len(df):
+            # sat/kvB is the wire unit; sat/vB is what every fee tool quotes.
+            df["min_relay_fee_sat_vb"] = (df.min_relay_fee_sat_kvb / 1000.0).round(4)
+        return df
 
     def peer_frame(self) -> pd.DataFrame:
         return pd.DataFrame([{

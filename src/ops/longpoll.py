@@ -662,6 +662,15 @@ def main() -> int:
         if len(ppf):
             write(e21_btc_p2p.PEER_DATASET, ppf, run_id)
 
+    # Written once, outside both branches above: relay floors arrive on handshake and do not
+    # depend on a block having been seen during the window.
+    fdf = p2p.floor_frame()
+    if len(fdf):
+        print(f"  E21 floors: {len(fdf):,} feefilter messages from {fdf.peer_addr.nunique()} "
+              f"peers | median {fdf.min_relay_fee_sat_vb.median():.3f} sat/vB, "
+              f"{fdf.min_relay_fee_sat_vb.nunique()} distinct values", flush=True)
+        write(e21_btc_p2p.FLOOR_DATASET, fdf, run_id)
+
     ddf = sdirect.frame()
     if len(ddf):
         # PROPAGATION is the spread of OUR observed_ts across pools for a NEW block, i.e.
