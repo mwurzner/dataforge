@@ -11,9 +11,20 @@ name: Ephemeral collector
 # pending, or that it was dropped. So each job polls continuously for ~5.5h. Actions caps a job at
 # 6h, so 5.5h leaves margin for setup and the final reconciliation read.
 #
-# FOUR STARTS AT 6h INTERVALS give ~22h/day coverage with ~30min gaps. The gaps are real and are
-# visible in e0_run_manifest -- an ephemeral gap cannot be repaired, so it is recorded rather than
-# hidden.
+# FIVE STARTS AT 5h INTERVALS. Four starts were paired with a 22h/day claim that the
+# configuration never delivered: four 4.5h windows is 18h nominal, and e0_run_manifest measured
+# 16.1h/day averaged over four complete days -- 67%, with individual days at 46%, 51%, 72% and
+# 100%, and gaps as long as 7.5h when a cron fired late. The 100% day happened only because queue
+# delays made runs overlap by accident.
+#
+# Five 4.5h windows is 22.5h nominal, which is what the old comment claimed. The trade is storage:
+# the panels write ~121 MB per covered day, so higher coverage costs proportionally more of the
+# HuggingFace free tier. Five slots was chosen over six deliberately -- six would demand 27h of
+# collection per 24h day and run continuously, which buys the last 6% of coverage at roughly a
+# third more storage.
+#
+# The gaps that remain are real and visible in e0_run_manifest. An ephemeral gap cannot be
+# repaired, so it is recorded rather than hidden.
 #
 # Secrets: DATA_REPO_SSH_KEY (deploy key) and HF_TOKEN. The ephemeral SOURCES are all
 # free and unauthenticated -- these secrets are for storage and distribution only.
@@ -21,9 +32,10 @@ name: Ephemeral collector
 on:
   schedule:
     - cron: '7 0 * * *'
-    - cron: '7 6 * * *'
-    - cron: '7 12 * * *'
-    - cron: '7 18 * * *'
+    - cron: '7 5 * * *'
+    - cron: '7 10 * * *'
+    - cron: '7 15 * * *'
+    - cron: '7 20 * * *'
   # WINDOW LENGTH IS 4.5h, NOT 5.5h, and the reason is scheduling jitter rather than the job
   # limit. Observed start delays on this repo run 50 minutes to 1.8 hours against the cron time,
   # so a 5.5h window inside a 6h slot regularly overran into the next slot; the concurrency group
