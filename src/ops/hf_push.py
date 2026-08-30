@@ -15,6 +15,7 @@ So the split is by AUDIENCE, not by dataset count:
     ethereum-attestation-pool       attestations seen waiting against attestations included
     crypto-options-surface          every listed strike, priced, with its greeks
     equity-perp-price-discovery     what an equity price does when its cash market is shut
+    solana-dex-execution            Solana swap quotes and the routes behind them
 
 A product is added when a collector has an audience the existing repos do not reach, not when
 it produces a new table. PRODUCTS below is the authority; this list is a summary of it.
@@ -126,6 +127,7 @@ WINDOWED = {
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
     "e21_btc_tx_propagation", "e23_perp_mark_index",
+    "e24_solana_quotes", "e24_solana_routes",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -713,6 +715,67 @@ violations and no checks is not the same as a run with no violations and thousan
   two samples is invisible. This undercounts violations and cannot overcount them.
 - Two chains, both OP-stack. Sequencer behaviour is an implementation choice, so this does not
   generalise to rollups built differently.
+""",
+    },
+    "solana-dex-execution": {
+        "datasets": ["e24_solana_quotes", "e24_solana_routes", MANIFEST],
+        "example": "e24_solana_quotes",
+        "pretty": "Solana swap quotes and the venues an aggregator routes them through",
+        "tags": ["solana", "dex", "routing", "liquidity", "execution", "cryptocurrency",
+                 "trading", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Solana DEX execution costs and routing
+
+What a swap was quoted at on Solana, and which venues the aggregator split it across to get
+there.
+
+A quote is computed per request against pool state that has already changed by the time anyone
+asks again. The fill that follows may land on chain; the quote never does, and neither does the
+route the aggregator considered and rejected.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e24_solana_quotes` | one pair at one size at one moment: output, price impact, dollar value, leg count |
+| `e24_solana_routes` | one leg of the chosen route: venue, amounts, and the percentage of the order it carried |
+
+## Reading it
+
+Join the two on `(round_ts, input_symbol, output_symbol, in_amount)`. A quote with `n_legs` above
+one was split, and `percent` on each leg says how the order was divided.
+
+The size ladder is fixed at 1, 50 and 1,000 SOL so that impact is comparable over time rather
+than against a moving notional. Impact rises with size on every pair, which is the sanity check
+this table has to pass: one observation ran 0.0000%, 0.0013% and 0.065% on a thin pair against
+0.0000%, 0.000018% and 0.000068% on the deepest one.
+
+Routing is the part that is hard to get elsewhere. The same pair goes through one venue at small
+size and four or five at large size, and the venue mix changes between rounds, which maps where
+routable liquidity actually sits rather than where volume was reported.
+
+## A column that is raw on purpose
+
+`amm_report_raw` is the aggregator's own report on the venues it considered, stored verbatim as
+JSON rather than parsed into a comparison.
+
+It is kept raw because it is NOT restricted to the pair being quoted. A request for SOL into a
+memecoin returns values on the scale of a stablecoin quote, and at least one entry has been the
+string "Pair insufficient liquidity" rather than a number. An earlier version derived a
+"chosen route versus best single venue" spread from this field and produced 340 million basis
+points, which is what exposed the mismatch. The raw object keeps the information without
+publishing a derived number that means nothing.
+
+## Before you build on this
+
+- One aggregator. It is the dominant one on Solana, but a quote is what it would route, not the
+  best price obtainable anywhere.
+- Quotes are indicative. A real swap adds transaction landing risk, priority fees and slippage
+  against a moving pool, none of which a quote reflects.
+- `price_impact_pct` is the aggregator's own estimate, not something recomputed here.
+- Five pairs, all with SOL as the input. That is a slice of Solana, not a census.
+- A failed request is written as an explicit error row with the measurements null, so an
+  unavailable aggregator is distinguishable from a pair with no route.
 """,
     },
     "crypto-execution-costs": {
