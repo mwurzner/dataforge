@@ -12,7 +12,6 @@ Operational notes:
 from __future__ import annotations
 
 import gzip
-import gzip
 import json
 import os
 import random
@@ -22,6 +21,7 @@ import urllib.request
 import pandas as pd
 
 DATASET = "e8_btc_mempool_lifecycle"
+BLOCK_DATASET = "e8_btc_block_composition"
 DIVERGENCE_DATASET = "e9_btc_mempool_divergence"
 HDRS = {"User-Agent": "dataforge/1.0", "Accept-Encoding": "gzip"}
 
@@ -144,6 +144,12 @@ class BtcMempoolTracker:
         self.other: set[str] = set()
         self.other_ts = 0.0
         self.n_other_saved = 0      # candidates killed by the cross-check, costing no status call
+        self.block_rows: list[dict] = []
+        # Height of the tip when we started. Blocks at or below it were mined BEFORE our
+        # first mempool read, so none of their transactions could have been seen pending and
+        # a composition row for them reads 100% unseen. That is a startup artifact, not
+        # out-of-band submission, and it is excluded rather than published.
+        self.start_tip = 0
 
     def poll_pool(self) -> tuple[int, int]:
         """One full mempool read, diffed against the last. Returns (new, newly-absent)."""
@@ -225,6 +231,7 @@ class BtcMempoolTracker:
             return 0
         if self.tip == 0:
             self.tip = h - 1
+            self.start_tip = h
         marked = 0
         # Cap the catch-up so a long stall cannot blow the time budget.
         for n in range(self.tip + 1, min(h, self.tip + 6) + 1):
@@ -237,12 +244,39 @@ class BtcMempoolTracker:
                 self.n_failed += 1
                 continue
             obs = time.time()
+            known = 0
             for t in txs:
-                if (t in self.seen or t in self.pre_existing) and t not in self.mined:
-                    self.mined[t] = (n, obs)
-                    marked += 1
+                if t in self.seen or t in self.pre_existing:
+                    known += 1
+                    if t not in self.mined:
+                        self.mined[t] = (n, obs)
+                        marked += 1
+            # BLOCK COMPOSITION, from data already fetched. The transactions in a block that we
+            # never held are the interesting ones: out-of-band submission straight to a pool
+            # looks exactly like this. So does a transaction broadcast between two of our polls,
+            # so this is an UPPER BOUND and the poll counters travel with it to say how tight.
+            # The coinbase is excluded because it is never broadcast and would inflate every row.
+            # Emit only for blocks mined after we began, and only once the baseline polls
+            # have established what was already pending.
+            if n > self.start_tip and self.n_poll >= BASELINE_POLLS:
+                self.block_rows.append({
+                    "observed_ts": obs, "height": n, "block_hash": bh,
+                    "n_txs": len(txs),
+                    "n_excl_coinbase": max(len(txs) - 1, 0),
+                    "n_seen_in_mempool": known,
+                    "n_never_seen": max(len(txs) - 1 - known, 0),
+                    "share_never_seen": (round((len(txs) - 1 - known) / (len(txs) - 1), 6)
+                                         if len(txs) > 1 else None),
+                    "pool_size_at_block": len(self.pool) or len(self.pre_existing),
+                    "polls_so_far": self.n_poll,
+                    "poll_failures": self.n_failed,
+                })
             self.tip = n
         return marked
+
+    def block_frame(self) -> pd.DataFrame:
+        """One row per block observed: how much of it we had already seen pending."""
+        return pd.DataFrame(self.block_rows)
 
     def verify_dropped(self, cap: int = VERIFY_CAP) -> dict:
         """Authoritative check on drop candidates. `dropped` is the column this dataset exists
