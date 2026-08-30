@@ -565,6 +565,12 @@ def main() -> int:
     if div_rows:
         write(e3_divergence.DATASET, pd.concat(div_rows, ignore_index=True), run_id)
 
+    cdf = btc.block_frame()
+    if len(cdf):
+        print(f"  E8 blocks: {len(cdf)} block(s) | median share never seen in our mempool "
+              f"{cdf.share_never_seen.median():.4f}", flush=True)
+        write(e8_btc_mempool.BLOCK_DATASET, cdf, run_id)
+
     bdf = btc.frame()
     # A SHORT RUN OBSERVES NOTHING. The first polls establish a baseline of pre-existing
     # transactions whose first_seen is unobservable; only what arrives AFTER that is lifecycle.

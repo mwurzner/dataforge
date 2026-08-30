@@ -127,7 +127,7 @@ WINDOWED = {
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
     "e21_btc_tx_propagation", "e23_perp_mark_index",
-    "e24_solana_quotes", "e24_solana_routes",
+    "e24_solana_quotes", "e24_solana_routes", "e8_btc_block_composition",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -532,7 +532,8 @@ non-round values are nodes whose own mempool is evicting.
     },
     "bitcoin-mempool-lifecycle": {
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-                     "e11_ltc_mempool_lifecycle", "e15_fee_estimators", MANIFEST],
+                     "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
+                     "e8_btc_block_composition", MANIFEST],
         "example": "e8_btc_mempool_lifecycle",
         "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
         "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
@@ -554,6 +555,7 @@ leaves no record at all. Both are recorded here as they happen.
 | `e9_btc_mempool_divergence` | one view of the pending set at one instant, sized and compared against the others |
 | `e11_ltc_mempool_lifecycle` | the same, for Litecoin |
 | `e15_fee_estimators` | one fee estimate from one provider at one moment, with its target |
+| `e8_btc_block_composition` | one block: how much of it we had already seen pending |
 
 Ethereum moved to its own repo, `ethereum-mempool`, rather than sitting inside a Bitcoin panel.
 Peer-to-peer propagation and relay floors likewise moved to `bitcoin-network-propagation`.
@@ -596,6 +598,27 @@ as a drop.
 
 Bitcoin `fate = "dropped"` begins 2026-08-26. Earlier partitions contain no drops because a
 defect made them impossible to record, not because none occurred.
+
+## How much of a block did we already know about
+
+`e8_btc_block_composition` counts, for every block, how many of its transactions were already in
+our mempool view and how many appeared for the first time in the block itself.
+
+The second number is the interesting one. A transaction that reaches a miner without crossing the
+public relay network looks exactly like this, which is what direct-to-pool submission is. So does
+a transaction broadcast in the seconds between two of our polls, and so does one our providers
+simply never held. **The column is therefore an upper bound on out-of-band submission, not a
+measurement of it**, and `polls_so_far`, `poll_failures` and `pool_size_at_block` travel on every
+row so the bound can be tightened or discarded.
+
+It doubles as a coverage statement for the rest of this repo. If you want to know how complete
+the mempool view behind `e8_btc_mempool_lifecycle` is, this is the answer, block by block, in the
+data rather than in a claim.
+
+The coinbase is excluded, since it is created by the miner and never broadcast; counting it would
+add one guaranteed unseen transaction to every block. Blocks mined before a run's baseline was
+established are not recorded at all, because none of their transactions could have been seen and
+the row would read 100% unseen for a reason that has nothing to do with the network.
 
 ## Package fee rates
 
