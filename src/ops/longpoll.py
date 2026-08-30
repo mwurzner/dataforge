@@ -44,6 +44,7 @@ from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
                            e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct,
                            e22_options_surface, e23_perp_mark, e24_solana_quotes,
+                           e28_fee_accuracy,
                            e21_btc_p2p)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -669,6 +670,17 @@ def main() -> int:
               f"max divergence {sr.max():.1f}x" if len(sr) else
               f"  E15: {len(okf):,} fee estimates", flush=True)
         write(e15_feeest.DATASET, fdf, run_id)
+        # DERIVED, costing no requests: joins what each provider predicted to what the block it
+        # was predicting actually required. Recomputable from the two inputs, so a later fix
+        # needs no re-collection.
+        acc = e28_fee_accuracy.build(fdf, bdf)
+        if len(acc):
+            ok_acc = acc[acc.sufficient.notna()]
+            print(f"  E28: {len(acc):,} forecast-vs-outcome rows over "
+                  f"{acc.height.nunique()} blocks | sufficient "
+                  f"{100*ok_acc.sufficient.mean():.0f}% | median overpay "
+                  f"{acc.overpay_ratio.median():.2f}x", flush=True)
+            write(e28_fee_accuracy.DATASET, acc, run_id)
 
     pfs = []
     for w in preconf.values():
