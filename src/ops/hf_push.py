@@ -9,6 +9,7 @@ past lending-market parquet to reach it. The naming problem was a packaging prob
 So the split is by AUDIENCE, not by dataset count:
 
     bitcoin-mempool-lifecycle       what happens to transactions before they confirm
+    bitcoin-fee-estimator-accuracy  what estimators advised against what blocks required
     crypto-execution-costs          what it costs to move money, quoted and compared
     remittance-pricing-panel        what banks and money transmitters charge, corridor by corridor
     bitcoin-mining-pool-templates   what pools are building on, and how blocks propagate
@@ -125,7 +126,7 @@ WINDOWED = {
     "e3_mempool_divergence", "e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
     "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
-    "e16_dex_routes", "e17_perp_depth",
+    "e16_dex_routes", "e17_perp_depth", "e28_fee_estimator_accuracy",
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
@@ -711,10 +712,85 @@ non-round values are nodes whose own mempool is evicting.
   configured with. They move when a mempool fills, which is when they matter.
 """,
     },
+    "bitcoin-fee-estimator-accuracy": {
+        "datasets": ["e15_fee_estimators", "e28_fee_estimator_accuracy", MANIFEST],
+        "example": "e28_fee_estimator_accuracy",
+        "pretty": "What Bitcoin fee estimators advised, against what blocks required",
+        "tags": ["bitcoin", "fee-estimation", "transaction-fees", "benchmark",
+                 "forecasting", "blockchain", "time-series"],
+        "size": "100K<n<1M",
+        "body": """# Bitcoin fee estimator accuracy
+
+What five fee estimators told you to pay, and what the block actually required.
+
+Only one half of this is scarce, and it is worth being precise about which.
+
+Outcomes are freely available. One of these providers will serve you a year of realised per-block
+fee rates for the asking, so what a block required is not a secret and never was.
+
+The advice is the perishable half. Every provider answers for right now and none serves a history
+of what it said: the documented history endpoints return 404, and the one that looks like an
+archive turns out to hold realised rates rather than past forecasts. A recommendation made last
+month therefore exists only if somebody wrote it down at the time.
+
+That is what this repo is. Not a clever method -- the join is arithmetic anyone could do -- but
+the half of the inputs that cannot be obtained after the fact.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e15_fee_estimators` | one provider's recommendation at one moment, for one confirmation target |
+| `e28_fee_estimator_accuracy` | one block against one provider's forecast for it: predicted, cleared, and whether it would have worked |
+
+## Reading it
+
+`sufficient` answers the only question a wallet actually asks: would paying the recommendation
+have got the transaction into that block. `overpay_ratio` is the recommendation divided by what
+cleared, so 1.0 is exact and 3.0 means paying triple.
+
+The two together are the whole point, because either alone is misleading. A provider can be
+sufficient every single time by quoting an absurd number, and cheap every time by quoting one
+that rarely works. One early window showed both failure modes at once: two providers were
+sufficient on 100% of blocks while quoting about 3x the going rate, and another quoted 1.1x and
+was sufficient on 83%. At a six-block target that same cheap provider fell to 41%.
+
+`target_blocks` is the provider's own horizon, and a forecast is matched to the block it was
+about -- roughly `target_blocks` block-times after it was made -- never to a block that had
+already been found when the forecast was issued.
+
+## What counts as the rate that cleared
+
+`cleared_p10` is the 10th percentile fee rate among **standalone** transactions in the block:
+those with no unconfirmed parent.
+
+That restriction is doing real work and the number is wrong without it. About 93% of the
+cheapest-looking transactions in a block are not standalone -- they were admitted on a relative's
+fee, through a parent or a fee-bumping child. Counting them measures the lowest rate *visible*
+in a block rather than the lowest rate that would have *worked*, and it inflates apparent
+overpayment by roughly three and a half times. `cleared_p10_all_txs` carries the unrestricted
+figure so the gap between the two definitions is visible in the data.
+
+The minimum is not used at all: blocks legitimately contain zero-fee transactions handed straight
+to a pool, and those measure a private arrangement rather than a market.
+
+## Before you build on this
+
+- Five providers, and they are the ones that answer without an API key. That is a selection.
+- `n_standalone` is on every row. A block with few standalone transactions gives a noisier
+  percentile, and low-activity periods produce fewer of them.
+- Fee coverage in the underlying panel is partial and varies with load, so the percentile is
+  computed over transactions whose fee we sampled, not over the whole block. It is never imputed.
+- A quiet mempool flatters every provider: when almost anything confirms, being sufficient is
+  easy and overpayment is large. Read the two columns together, and read them by regime rather
+  than pooled across months.
+- `lead_seconds` records how far ahead of the block each forecast was actually made. Matching is
+  to the newest forecast at or before the target moment, so this varies with sampling cadence.
+""",
+    },
     "bitcoin-mempool-lifecycle": {
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-                     "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
-                     "e8_btc_block_composition", MANIFEST],
+                     "e11_ltc_mempool_lifecycle", "e8_btc_block_composition", MANIFEST],
         "example": "e8_btc_mempool_lifecycle",
         "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
         "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
@@ -735,7 +811,6 @@ leaves no record at all. Both are recorded here as they happen.
 | `e8_btc_mempool_lifecycle` | a Bitcoin transaction: first seen, fee rate, mined height, blocks waited, fate |
 | `e9_btc_mempool_divergence` | one view of the pending set at one instant, sized and compared against the others |
 | `e11_ltc_mempool_lifecycle` | the same, for Litecoin |
-| `e15_fee_estimators` | one fee estimate from one provider at one moment, with its target |
 | `e8_btc_block_composition` | one block: how much of it we had already seen pending |
 
 Ethereum moved to its own repo, `ethereum-mempool`, rather than sitting inside a Bitcoin panel.
