@@ -613,7 +613,9 @@ row so the bound can be tightened or discarded.
 
 It doubles as a coverage statement for the rest of this repo. If you want to know how complete
 the mempool view behind `e8_btc_mempool_lifecycle` is, this is the answer, block by block, in the
-data rather than in a claim.
+data rather than in a claim. One observed block held 4,823 transactions excluding the coinbase,
+of which 4,804 were already in view: 99.6% captured, and 19 seen for the first time in the block
+itself.
 
 The coinbase is excluded, since it is created by the miner and never broadcast; counting it would
 add one guaranteed unseen transaction to every block. Blocks mined before a run's baseline was
