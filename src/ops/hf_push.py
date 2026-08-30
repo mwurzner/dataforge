@@ -630,12 +630,96 @@ them as the state at first sight rather than a running value.
   history. Theirs is better; use it.
 """,
     },
+    "fiat-onramp-pricing": {
+        "datasets": ["e12_onramp_quotes", MANIFEST],
+        "example": "e12_onramp_quotes",
+        "pretty": "What retail buyers are quoted to convert cash into crypto",
+        "tags": ["on-ramp", "payments", "retail", "pricing", "cryptocurrency",
+                 "fees", "time-series"],
+        "size": "100K<n<1M",
+        "body": """# Fiat on-ramp pricing
+
+What it costs a retail buyer to turn a card payment into crypto, quoted at the moment they would
+have bought.
+
+An on-ramp quote is computed per request against a rate, a spread and a fee schedule that all
+move. Nobody keeps the quotes, so the only record of what a buyer was actually offered is one
+made as it was offered.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e12_onramp_quotes` | one provider quoting one fiat amount into one asset: rate, fees, and what the buyer receives |
+
+## Reading it
+
+The amount received is the figure that matters. Providers split their margin differently between
+the exchange rate and the explicit fee, so comparing on the advertised fee alone will mislead
+you, and comparing on rate alone will mislead you in the other direction.
+
+Rows carry the quoted rate and the fee separately as well, so the split itself can be studied.
+
+## Before you build on this
+
+- A small number of providers, and they are the ones that quote without an API key. That is a
+  selection, not a market: the providers requiring a key are absent and are not a random subset.
+- Quotes are indicative. A real purchase adds identity checks, card-issuer behaviour and limits
+  that a quote does not reflect, and any of those can change the outcome or block it entirely.
+- Refusals are written as explicit error rows rather than omitted, so a provider that was
+  unavailable is distinguishable from one that had nothing to offer. Check `error` before
+  reading an absence as a decline.
+- Coverage per asset changes as providers list and delist pairs.
+""",
+    },
+    "l2-preconfirmation-reliability": {
+        "datasets": ["e14_l2_preconf", MANIFEST],
+        "example": "e14_l2_preconf",
+        "pretty": "Whether L2 sequencers keep the inclusion promises they make",
+        "tags": ["layer-2", "rollup", "sequencer", "ethereum", "reliability",
+                 "blockchain", "time-series"],
+        "size": "100K<n<1M",
+        "body": """# L2 sequencer preconfirmation reliability
+
+A rollup sequencer tells you your transaction is included before anything is settled on L1. This
+records whether that promise held.
+
+The promise is the ephemeral part. If a sequencer replaces an unsafe block, the version it
+originally gossiped is discarded and no archive serves it, so a broken promise is only
+observable to somebody who wrote down the original.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e14_l2_preconf` | either a heartbeat, recording how far the unsafe head ran ahead of the safe head, or a violation |
+
+## Mostly an attested absence
+
+Violations are rare, and the value here is in the zeros being credible rather than in the
+events. That requires the coverage rows: `n_checked` counts promises actually verified against
+the canonical chain and `n_failed` counts the checks that could not complete. A run with no
+violations and no checks is not the same as a run with no violations and thousands.
+
+`row_type` separates heartbeats from violations.
+
+## Before you build on this
+
+- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint served
+  a stale safe tag through much of the period, which yields a lag of tens of millions of blocks.
+  The raw numbers are published uncorrected so the endpoint's own inconsistency stays visible;
+  filter on the flag before using the column.
+- The unsafe head is sampled every few seconds, so a block that was proposed and replaced between
+  two samples is invisible. This undercounts violations and cannot overcount them.
+- Two chains, both OP-stack. Sequencer behaviour is an implementation choice, so this does not
+  generalise to rollups built differently.
+""",
+    },
     "crypto-execution-costs": {
         "datasets": ["e10_quote_benchmark", "e16_dex_routes", "e17_perp_depth",
-                     "e12_onramp_quotes",
-                     "e14_l2_preconf", MANIFEST],
+                     MANIFEST],
         "example": "e10_quote_benchmark",
-        "pretty": "Crypto execution costs: DEX quotes, fiat on-ramps, L2 confirmation",
+        "pretty": "What it costs to trade on a DEX: quotes, routes and book depth",
         "tags": ["defi", "dex", "execution-cost", "slippage", "onramp", "ethereum",
                  "blockchain", "cryptocurrency", "time-series"],
         "size": "10K<n<100K",
@@ -653,8 +737,6 @@ kept by nobody, so they only exist if they were recorded when they were served.
 | `e10_quote_benchmark` | one swap quote at a fixed size, with the provider fee separated out |
 | `e16_dex_routes` | one leg of a route a router chose: venue, pool, amount, and how many venues the trade was split across |
 | `e17_perp_depth` | one order book snapshot: spread, level counts, resting notional within fixed distances of mid |
-| `e12_onramp_quotes` | one fiat on-ramp quote |
-| `e14_l2_preconf` | an L2 sequencer promise, and whether it held |
 
 ## Reading it
 
@@ -682,12 +764,6 @@ often on thinner markets.
   reverses between observations is invisible.
 - Depth covers a single venue, so it sizes that one book rather than the market. Treat it as
   one participant's view; a second venue would be a control and there is not one here.
-- `e14_l2_preconf` is mostly an attested absence. Violations are rare and the value is in the
-  zeros being credible, which requires the coverage rows alongside them.
-- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint
-  served a stale `safe` tag through much of the period, which yields a lag of tens of millions
-  of blocks. The raw numbers are published uncorrected so the endpoint's own inconsistency
-  stays visible; filter on the flag before using the column.
 """,
     },
     "remittance-pricing-panel": {
