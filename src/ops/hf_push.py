@@ -732,14 +732,18 @@ violations and no checks is not the same as a run with no violations and thousan
 
 ## Before you build on this
 
-- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint served
-  a stale safe tag through much of the period, which yields a lag of tens of millions of blocks.
-  The raw numbers are published uncorrected so the endpoint's own inconsistency stays visible;
-  filter on the flag before using the column.
+- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint serves
+  a stale safe tag, giving a lag of tens of millions of blocks against another chain's few dozen.
+  It is kept rather than dropped, because an endpoint's own inconsistency is a fact about running
+  on public infrastructure; the flag is false on exactly those rows. Filter on it first.
 - The unsafe head is sampled every few seconds, so a block that was proposed and replaced between
   two samples is invisible. This undercounts violations and cannot overcount them.
-- Two chains, both OP-stack. Sequencer behaviour is an implementation choice, so this does not
-  generalise to rollups built differently.
+- Nine chains, ALL OP-stack. That is nine independent sequencer operators, which is enough to
+  compare them against each other, but it is still one rollup architecture: nothing here
+  generalises to a rollup built differently.
+- Safe-head lag varies enormously between them even at rest, from tens of blocks to several
+  thousand, and one endpoint reports a lag of tens of millions. Compare a chain against its own
+  history rather than against another chain's absolute level.
 """,
     },
     "solana-dex-execution": {

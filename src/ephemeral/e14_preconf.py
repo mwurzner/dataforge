@@ -48,9 +48,20 @@ import pandas as pd
 DATASET = "e14_l2_preconf"
 HDRS = {"Content-Type": "application/json", "User-Agent": "dataforge/1.0"}
 
+# Each was probed for a `latest` and a `safe` head before being added, and only chains whose
+# safe tag returned a plausible lag were kept. Optimism is retained despite failing that test --
+# its safe tag reported a lag of 38.8 MILLION blocks against Base's 38 -- because the endpoint's
+# own inconsistency is a fact worth publishing, and `safe_tag_plausible` marks it on every row.
 CHAINS = {
     "base": "https://mainnet.base.org",
     "optimism": "https://mainnet.optimism.io",
+    "zora": "https://rpc.zora.energy",
+    "mode": "https://mainnet.mode.network",
+    "ink": "https://rpc-gel.inkonchain.com",
+    "unichain": "https://mainnet.unichain.org",
+    "worldchain": "https://worldchain-mainnet.g.alchemy.com/public",
+    "soneium": "https://rpc.soneium.org",
+    "lisk": "https://rpc.api.lisk.com",
 }
 
 

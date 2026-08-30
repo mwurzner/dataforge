@@ -139,6 +139,47 @@ def _node_fee_snapshotter(btc, stop: "threading.Event", failures: list,
         stop.wait(every or RPC_MEMPOOL_EVERY_S)
 
 
+def _preconf_sampler(watchers: dict, stop: "threading.Event", failures: list) -> None:
+    """Poll every L2 sequencer head on its own thread.
+
+    MOVED OFF THE MAIN LOOP when the chain list grew past two. Each unsafe-head poll is a
+    blocking HTTP call, and the main loop runs them sequentially: at nine chains a 6s cycle
+    spends seconds inside e14 alone, which is exactly how inline quote calls once starved the
+    2s Bitcoin fee sampling.
+
+    Thread-safe by inspection, not assumption: each watcher writes only to its own state, and
+    nothing else touches those objects until the run ends and frames are collected.
+    """
+    last_unsafe = last_safe = last_hb = 0.0
+    while not stop.is_set():
+        now = time.time()
+        if now - last_unsafe >= 6:
+            for w in watchers.values():
+                try:
+                    w.poll_unsafe()
+                except Exception as exc:
+                    if len(failures) < 200:
+                        failures.append(f"e14 {w.chain}: {exc}")
+            last_unsafe = now
+        if now - last_safe >= 60:
+            for w in watchers.values():
+                try:
+                    w.poll_safe_and_verify()
+                except Exception as exc:
+                    if len(failures) < 200:
+                        failures.append(f"e14 safe {w.chain}: {exc}")
+            last_safe = now
+        if now - last_hb >= 120:
+            for w in watchers.values():
+                try:
+                    w.heartbeat()
+                except Exception as exc:
+                    if len(failures) < 200:
+                        failures.append(f"e14 hb {w.chain}: {exc}")
+            last_hb = now
+        stop.wait(1.0)
+
+
 def _p2p_reader(p2p, stop: "threading.Event", failures: list) -> None:
     """Hold Bitcoin P2P peer connections for the run.
 
@@ -314,7 +355,6 @@ def main() -> int:
     last_btc = last_btc_block = last_btc_div = 0.0
     last_quote = 0.0
     last_ltc = last_ltc_block = 0.0
-    last_preconf = last_preconf_safe = last_preconf_hb = 0.0
     last_fee = last_fee_sample = 0.0
     fee_rows: list[pd.DataFrame] = []
     quote_rows: list[pd.DataFrame] = []
@@ -363,6 +403,10 @@ def main() -> int:
     p2p_thread = threading.Thread(target=_p2p_reader, args=(p2p, fee_stop, failures),
                                   name="btc-p2p", daemon=True)
     p2p_thread.start()
+    preconf_thread = threading.Thread(target=_preconf_sampler,
+                                      args=(preconf, fee_stop, failures),
+                                      name="l2-preconf", daemon=True)
+    preconf_thread.start()
     sdirect_thread = threading.Thread(target=_stratum_direct_reader,
                                       args=(sdirect, fee_stop, failures),
                                       name="stratum-direct", daemon=True)
@@ -419,25 +463,6 @@ def main() -> int:
                 except Exception as exc:
                     failures.append(f"e9: {exc}")
                 last_btc_div = now
-
-            if now - last_preconf >= 6:
-                for w in preconf.values():
-                    try:
-                        w.poll_unsafe()
-                    except Exception as exc:
-                        failures.append(f"e14 {w.chain}: {exc}")
-                last_preconf = now
-            if now - last_preconf_safe >= 60:
-                for w in preconf.values():
-                    try:
-                        w.poll_safe_and_verify()
-                    except Exception as exc:
-                        failures.append(f"e14 safe {w.chain}: {exc}")
-                last_preconf_safe = now
-            if now - last_preconf_hb >= 120:
-                for w in preconf.values():
-                    w.heartbeat()
-                last_preconf_hb = now
 
             if now - last_fee >= 300:      # 5 min: estimators refresh on that order
                 try:
