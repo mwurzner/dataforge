@@ -197,9 +197,11 @@ Once a block is found, the templates every pool was building are gone.
 
 ## Templates
 
-Pools building on the same block do not agree. In one observation across six pools, nTime spread
-across 25 seconds and coinbase structures ranged from 318 to 980 characters. Two endpoints run by
-the same operator differed by 10 seconds.
+Pools building on the same block do not agree, and the disagreement is structural rather than
+cosmetic. In one observation across eleven endpoints on a single block, nTime spread across 30
+seconds, coinbase length ranged from 318 to 1,488 characters, and merkle branch counts split
+between 10 and 13, meaning some pools were assembling materially smaller blocks than others at
+the same moment. Two endpoints run by the same operator differed by 10 seconds.
 
 `pool` is the endpoint connected to rather than an identity inferred from the data. `operator`
 collapses endpoints belonging to the same operator, and rows should usually be grouped on it.
@@ -233,8 +235,8 @@ carries only the timestamp its miner claimed.
 - nTime is the pool's own clock and pools do not all update it on the same cadence. It indicates
   when a pool rebuilt its template. For arrival ordering use `observed_ts`, which is consistent
   across pools.
-- Six pools across five operators. Pools running regional endpoints may serve different work
-  elsewhere.
+- Eleven endpoints across ten operators. Pools running regional endpoints may serve different
+  work elsewhere, so this is a sample of what each operator was building, not a census of it.
 - Merkle branches are stored as a count and first entry. The count with the coinbase identifies a
   distinct template; the full list is large and mostly redundant.
 - `clean_jobs = true` marks a pool switching blocks. Sorting those by `observed_ts` gives the
