@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes,
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
                            e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct,
-                           e22_options_surface, e23_perp_mark,
+                           e22_options_surface, e23_perp_mark, e24_solana_quotes,
                            e21_btc_p2p)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -242,17 +242,18 @@ def _quote_round():
     surf = e22_options_surface.sample()
     # Books cost one request each, so they run here on the worker thread rather than inline:
     # about 25s for the ladder, which must not stall the 2s Bitcoin fee sampling.
+    sq, sr = e24_solana_quotes.sample()
     return (q, r, e12_onramp.sample(), e13_remit.sample(), e17_perpdepth.sample(),
-            surf, e22_options_surface.books(surf), e23_perp_mark.sample())
+            surf, e22_options_surface.books(surf), e23_perp_mark.sample(), sq, sr)
 
 
 def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_rows,
-                    surf_rows, book_rows, mark_rows, failures):
+                    surf_rows, book_rows, mark_rows, sq_rows, sr_rows, failures):
     """Drain a finished quote round. Returns True if the future was consumed."""
     if fut is None or not fut.done():
         return False
     try:
-        _q, _r, _o, _rm, _d, _s, _b, _mk = fut.result()
+        _q, _r, _o, _rm, _d, _s, _b, _mk, _sq, _sr = fut.result()
         quote_rows.append(_q)
         if len(_r):
             route_rows.append(_r)
@@ -262,6 +263,9 @@ def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_
         surf_rows.append(_s)
         book_rows.append(_b)
         mark_rows.append(_mk)
+        sq_rows.append(_sq)
+        if len(_sr):
+            sr_rows.append(_sr)
     except Exception as exc:
         failures.append(f"quote round: {exc}")
     return True
@@ -319,6 +323,8 @@ def main() -> int:
     surf_rows: list[pd.DataFrame] = []
     book_rows: list[pd.DataFrame] = []
     mark_rows: list[pd.DataFrame] = []
+    sq_rows: list[pd.DataFrame] = []
+    sr_rows: list[pd.DataFrame] = []
     quote_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='quotes')
     quote_future = None
     fee_stop = threading.Event()
@@ -458,7 +464,7 @@ def main() -> int:
             # must never wait on these -- see _quote_round.
             if _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
                                remit_rows, depth_rows, surf_rows, book_rows, mark_rows,
-                               failures):
+                               sq_rows, sr_rows, failures):
                 quote_future = None
             if quote_future is None and now - last_quote >= QUOTE_EVERY_S:
                 quote_future = quote_pool.submit(_quote_round)
@@ -504,7 +510,8 @@ def main() -> int:
         except Exception as exc:
             failures.append(f"quote round (final): {exc}")
         _collect_quotes(quote_future, quote_rows, route_rows, onramp_rows,
-                        remit_rows, depth_rows, surf_rows, book_rows, mark_rows, failures)
+                        remit_rows, depth_rows, surf_rows, book_rows, mark_rows,
+                        sq_rows, sr_rows, failures)
     quote_pool.shutdown(wait=False)
 
     # Final catch-up and reconciliation. Anything seen, never mined, and absent from the pool is
@@ -747,6 +754,18 @@ def main() -> int:
               f"{oks.asset.nunique() if len(oks) else 0} assets and "
               f"{oks.expiry.nunique() if len(oks) else 0} expiries", flush=True)
         write(e22_options_surface.DATASET, sdf, run_id)
+
+    if sq_rows:
+        sqdf = pd.concat(sq_rows, ignore_index=True)
+        oksq = sqdf[sqdf.error.isna()]
+        print(f"  E24: {len(sqdf):,} Solana quotes, {len(oksq):,} answered across "
+              f"{oksq.output_symbol.nunique() if len(oksq) else 0} pairs", flush=True)
+        write(e24_solana_quotes.DATASET, sqdf, run_id)
+    if sr_rows:
+        srdf = pd.concat(sr_rows, ignore_index=True)
+        print(f"  E24 routes: {len(srdf):,} legs across {srdf.leg_venue.nunique()} venues",
+              flush=True)
+        write(e24_solana_quotes.ROUTE_DATASET, srdf, run_id)
 
     if mark_rows:
         mdf = pd.concat(mark_rows, ignore_index=True)
