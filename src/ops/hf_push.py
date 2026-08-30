@@ -363,8 +363,8 @@ equity book live, with marks moving while their indices barely did.
         "datasets": ["e22_options_surface", "e22_options_book", MANIFEST],
         "example": "e22_options_surface",
         "pretty": "Implied volatility surface for on-chain crypto options",
-        "tags": ["options", "implied-volatility", "derivatives", "greeks", "cryptocurrency",
-                 "ethereum", "bitcoin", "solana", "time-series", "finance"],
+        "tags": ["options", "implied-volatility", "derivatives", "greeks", "order-book",
+                 "bitcoin", "ethereum", "solana", "cryptocurrency", "time-series"],
         "size": "1M<n<10M",
         "body": """# Crypto options implied volatility surface
 
@@ -792,9 +792,9 @@ to a pool, and those measure a private arrangement rather than a market.
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
                      "e11_ltc_mempool_lifecycle", "e8_btc_block_composition", MANIFEST],
         "example": "e8_btc_mempool_lifecycle",
-        "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
-        "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
-                 "ethereum", "blockchain", "cryptocurrency", "time-series"],
+        "pretty": "Bitcoin and Litecoin mempool: dwell times, drops, and block composition",
+        "tags": ["mempool", "bitcoin", "litecoin", "unconfirmed-transactions",
+                 "transaction-fees", "blockchain", "cryptocurrency", "time-series"],
         "size": "1M<n<10M",
         "body": """# Bitcoin mempool lifecycle
 
@@ -908,9 +908,6 @@ them as the state at first sight rather than a running value.
   break your arithmetic rather than treating it as a decode fault.
 - Timestamps are ours, taken at observation. They are not consensus timestamps and carry our
   network distance to whatever served the data.
-- Ethereum rows are included for comparison. If Ethereum is your subject, the Flashbots Mempool
-  Dumpster publishes the same measurement daily under CC-0 from a wider node set and a longer
-  history. Theirs is better; use it.
 """,
     },
     "fiat-onramp-pricing": {
@@ -1069,9 +1066,9 @@ publishing a derived number that means nothing.
         "datasets": ["e10_quote_benchmark", "e16_dex_routes", "e17_perp_depth",
                      MANIFEST],
         "example": "e10_quote_benchmark",
-        "pretty": "What it costs to trade on a DEX: quotes, routes and book depth",
-        "tags": ["defi", "dex", "execution-cost", "slippage", "onramp", "ethereum",
-                 "blockchain", "cryptocurrency", "time-series"],
+        "pretty": "Ethereum DEX swap quotes, routing, and perpetual order-book depth",
+        "tags": ["dex", "ethereum", "defi", "execution-cost", "slippage", "routing",
+                 "perpetual-futures", "order-book", "trading", "time-series"],
         "size": "10K<n<100K",
         "body": """# Crypto execution costs
 
