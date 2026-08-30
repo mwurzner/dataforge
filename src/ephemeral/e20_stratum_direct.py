@@ -30,6 +30,15 @@ POOLS = [
     ("antpool",   "stratum.antpool.com",   3333, "antpool", True),
     ("f2pool",    "btc.f2pool.com",        3333, "f2pool",  True),
     ("poolin",    "btc.ss.poolin.com",      443, "poolin",  True),
+    # Added after probing each for an anonymous subscribe that actually yields mining.notify;
+    # candidates that connected but sent no work were left out rather than added hopefully.
+    # needs_auth is True for all five because that is the configuration they were verified in.
+    # None required a payout address, so the no-address policy in the docstring is unchanged.
+    ("luxor",     "btc.global.luxor.tech",  700, "luxor",   True),
+    ("binance",   "bs.poolbinance.com",    3333, "binance", True),
+    ("kano",      "stratum.kano.is",       3333, "kano",    True),
+    ("ocean",     "mine.ocean.xyz",        3334, "ocean",   True),
+    ("secpool",   "btc.secpool.com",       3333, "secpool", True),
 ]
 
 # An honest worker name. Not an address, so it cannot receive funds, and identifiable if an
