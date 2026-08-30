@@ -16,6 +16,9 @@ So the split is by AUDIENCE, not by dataset count:
     crypto-options-surface          every listed strike, priced, with its greeks
     equity-perp-price-discovery     what an equity price does when its cash market is shut
     solana-dex-execution            Solana swap quotes and the routes behind them
+    litecoin-network-propagation    the same P2P measurement on a faster chain
+    dogecoin-network-propagation    and on the fastest, at a block a minute
+    bitcoin-cash-network-propagation  same cadence as Bitcoin, different node mix
 
 A product is added when a collector has an audience the existing repos do not reach, not when
 it produces a new table. PRODUCTS below is the authority; this list is a summary of it.
@@ -128,6 +131,12 @@ WINDOWED = {
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
     "e21_btc_tx_propagation", "e23_perp_mark_index",
     "e24_solana_quotes", "e24_solana_routes", "e8_btc_block_composition",
+    "e25_ltc_block_propagation", "e25_ltc_tx_propagation",
+    "e25_ltc_relay_floor", "e25_ltc_p2p_peers",
+    "e26_doge_block_propagation", "e26_doge_tx_propagation",
+    "e26_doge_relay_floor", "e26_doge_p2p_peers",
+    "e27_bch_block_propagation", "e27_bch_tx_propagation",
+    "e27_bch_relay_floor", "e27_bch_p2p_peers",
 }
 # Collected and archived, never published: freely available from an archive node.
 ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
@@ -468,6 +477,178 @@ with no free equivalent, because a transaction that is never mined leaves no on-
   for a date after 2026-08-26, the Dumpster has them and this does not.
 """,
     },
+    "dogecoin-network-propagation": {
+        "datasets": ["e26_doge_block_propagation", "e26_doge_tx_propagation",
+                     "e26_doge_relay_floor", "e26_doge_p2p_peers", MANIFEST],
+        "example": "e26_doge_block_propagation",
+        "pretty": "Dogecoin block and transaction propagation, at one block a minute",
+        "tags": ["dogecoin", "peer-to-peer", "propagation", "networking", "latency",
+                 "blockchain", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Dogecoin network propagation
+
+How fast the Dogecoin peer network learns things, measured from connections held to its reachable
+peers at once.
+
+Dogecoin targets a block every minute. That is ten times Bitcoin's rate, and it makes this the
+densest propagation record of the set: one 140-second window produced 33 block announcements here
+against a single block on Bitcoin.
+
+Nothing here can be reconstructed later. A block carries only the timestamp its miner claimed, an
+announcement carries none at all, and a peer's own relay policy is broadcast and forgotten.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e26_doge_block_propagation` | one peer announcing one block, timestamped |
+| `e26_doge_tx_propagation` | one peer announcing one transaction, timestamped |
+| `e26_doge_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
+| `e26_doge_p2p_peers` | one peer connected to: user agent, services, handshake state |
+
+## What a one-minute block buys you
+
+Propagation is measured against the first peer to tell us, so the useful quantity is the spread
+across peers for the same block. On a ten-minute chain a collection window catches a handful of
+blocks; here it catches dozens, which is the difference between an anecdote and a distribution.
+
+The node population is unusually uniform: peers run Shibetoshi 1.14.x almost exclusively, against
+the several independent implementations seen on Bitcoin Cash. A network where nearly every node
+runs the same build is a useful control for anything that might be implementation-specific.
+
+## Transactions are NOT sampled here
+
+Bitcoin's transaction announcements are sampled at roughly one in sixty-four because they arrive
+in the thousands per second. Dogecoin does not need that: one window carried 1,080 announcements
+of only about 22 distinct transactions, so everything is kept. A near-empty mempool is itself the
+reason the propagation curves are complete rather than sampled.
+
+## Before you build on this
+
+- Peers come from DNS seeds rather than a crawler. Two of the four published seeds no longer
+  resolve, so the reachable set is smaller and more concentrated than Bitcoin's.
+- Timings are ours and include network distance to each peer. Differences of milliseconds are
+  partly geography; differences of seconds are not. `peer_addr` is retained so this can be
+  controlled for.
+- A peer that disconnects stops announcing, which resembles slowness. `e26_doge_p2p_peers`
+  carries handshake state so a gap can be told from a silence.
+- Merge-mined with Litecoin, so block timing here is not independent of that chain. If you are
+  comparing the two, that is a shared cause and not a coincidence.
+""",
+    },
+    "bitcoin-cash-network-propagation": {
+        "datasets": ["e27_bch_block_propagation", "e27_bch_tx_propagation",
+                     "e27_bch_relay_floor", "e27_bch_p2p_peers", MANIFEST],
+        "example": "e27_bch_block_propagation",
+        "pretty": "Bitcoin Cash propagation across several independent node implementations",
+        "tags": ["bitcoin-cash", "peer-to-peer", "propagation", "networking", "latency",
+                 "blockchain", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Bitcoin Cash network propagation
+
+How fast the Bitcoin Cash peer network learns things, measured from connections held to its
+reachable peers at once.
+
+Nothing here can be reconstructed later. A block carries only the timestamp its miner claimed, an
+announcement carries none at all, and a peer's own relay policy is broadcast and forgotten.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e27_bch_block_propagation` | one peer announcing one block, timestamped |
+| `e27_bch_tx_propagation` | one peer announcing one transaction, timestamped |
+| `e27_bch_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
+| `e27_bch_p2p_peers` | one peer connected to: user agent, services, handshake state |
+
+## The reason to have this one
+
+Bitcoin Cash keeps Bitcoin's ten-minute cadence and its transaction format, and carries a
+fraction of the load. That makes it the closest thing available to a control for the Bitcoin
+panels: same protocol, same block target, very different congestion.
+
+Its node population is the opposite of Dogecoin's. One window held Bitcoin Cash Node, Bitcoin ABC
+and Bitcoin SV peers simultaneously, which are independent implementations speaking the same
+protocol on the same network. Anything that differs between them is visible here and invisible on
+a chain where every node runs the same build.
+
+## Before you build on this
+
+- Blocks are sparse by construction at ten minutes apart, so a short window may catch one or
+  none. Judge coverage from `e0_run_manifest` and from the peer table rather than from the block
+  count alone.
+- Peers come from DNS seeds rather than a crawler, so the reachable set is smaller and more
+  concentrated than Bitcoin's.
+- Transactions are not sampled here, unlike the Bitcoin panels: the load does not require it, so
+  the propagation curves are complete rather than one-in-sixty-four.
+- Timings are ours and include network distance to each peer. `peer_addr` is retained so this can
+  be controlled for.
+- A peer that disconnects stops announcing, which resembles slowness. `e27_bch_p2p_peers` carries
+  handshake state so a gap can be told from a silence.
+""",
+    },
+    "litecoin-network-propagation": {
+        "datasets": ["e25_ltc_block_propagation", "e25_ltc_tx_propagation",
+                     "e25_ltc_relay_floor", "e25_ltc_p2p_peers", MANIFEST],
+        "example": "e25_ltc_block_propagation",
+        "pretty": "Litecoin block and transaction propagation across the peer network",
+        "tags": ["litecoin", "peer-to-peer", "propagation", "networking", "latency",
+                 "blockchain", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Litecoin network propagation
+
+How fast the Litecoin peer network learns things, measured from connections held to its reachable
+peers at once.
+
+Nothing here can be reconstructed later. A block carries only the timestamp its miner claimed, an
+announcement carries none at all, and a peer's own relay policy is broadcast and forgotten.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e25_ltc_block_propagation` | one peer announcing one block, timestamped |
+| `e25_ltc_tx_propagation` | one peer announcing one transaction, timestamped |
+| `e25_ltc_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
+| `e25_ltc_p2p_peers` | one peer connected to: user agent, services, handshake state |
+
+## Why a second chain at all
+
+Litecoin runs the same wire protocol as Bitcoin and targets a block every 2.5 minutes rather than
+10. That makes it the denser of the two: one short window produced 69 block announcements here
+against 2 on Bitcoin over the same period, because there is simply more to see.
+
+It exists so the Bitcoin figures have something to be compared against. A propagation delay or a
+relay-floor distribution means little on its own; it means considerably more set beside the same
+measurement on a chain with four times the block rate and a different node population. The
+companion panels are in `bitcoin-network-propagation`, collected by the same code in the same
+process, which is what makes the comparison fair.
+
+## The node population is different, and that is the point
+
+Peers here run LitecoinCore, and the versions observed spread much wider than Bitcoin's, from
+0.21.x down to a node still on 0.15.1. Relay floors spread wider too: one sample held 0.1, 1.0
+and 100.0 sat/vB, the last being a node that will not forward anything remotely ordinary.
+
+## Before you build on this
+
+- Peers come from DNS seeds rather than a crawler, because Litecoin has no Bitnodes equivalent.
+  Two of the four published seeds no longer resolve, so the reachable set is smaller and more
+  concentrated than Bitcoin's. It is a sample of the network and a narrower one.
+- Timings are ours and include network distance to each peer. Differences of milliseconds are
+  partly geography; differences of seconds are not. `peer_addr` is retained so this can be
+  controlled for.
+- Transactions are announced with deliberately randomised timing on this network too, so the
+  transaction table measures that privacy behaviour rather than raw relay speed. Compare it
+  against the block table, not against zero.
+- Transactions are SAMPLED at roughly one in ten, by txid. This chain carries enough of them that
+  keeping everything would dominate the whole project's storage. The test is a property of the
+  hash, so it is identical on every peer and a curve is never truncated by when we started
+  watching. The Dogecoin and Bitcoin Cash panels are quiet enough to keep everything, and say so.
+- A peer that disconnects stops announcing, which resembles slowness. `e25_ltc_p2p_peers` carries
+  handshake state so a gap can be told from a silence.
+""",
+    },
     "bitcoin-network-propagation": {
         "datasets": ["e21_btc_block_propagation", "e21_btc_tx_propagation",
                      "e21_btc_relay_floor", "e21_btc_p2p_peers", MANIFEST],
@@ -732,10 +913,12 @@ violations and no checks is not the same as a run with no violations and thousan
 
 ## Before you build on this
 
-- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint serves
-  a stale safe tag, giving a lag of tens of millions of blocks against another chain's few dozen.
-  It is kept rather than dropped, because an endpoint's own inconsistency is a fact about running
-  on public infrastructure; the flag is false on exactly those rows. Filter on it first.
+- `lag_blocks` is only meaningful where `safe_tag_plausible` is true. One chain's endpoint has
+  served a stale safe tag intermittently, giving a lag of tens of millions of blocks against
+  another chain's few dozen, then recovering to a normal figure hours later. It is kept rather
+  than dropped, because an endpoint's own inconsistency is a fact about running on public
+  infrastructure, and because it comes and goes you cannot exclude a chain once and be done.
+  The flag is false on exactly the affected rows; filter on it, not on the chain name.
 - The unsafe head is sampled every few seconds, so a block that was proposed and replaced between
   two samples is invisible. This undercounts violations and cannot overcount them.
 - Nine chains, ALL OP-stack. That is nine independent sequencer operators, which is enough to

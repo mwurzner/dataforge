@@ -45,6 +45,69 @@ MSG_WITNESS_BLOCK = 0x40000002
 MSG_WITNESS_TX = 0x40000001
 BITNODES = "https://bitnodes.io/api/v1/snapshots/latest/"
 
+# LITECOIN runs the same wire protocol, so the collector above serves it unchanged once given a
+# different magic and a peer source. There is no Bitnodes equivalent, so peers come from the
+# published DNS seeds -- two of the four no longer resolve, which is why the count is smaller.
+# Blocks arrive every ~2.5 minutes rather than ~10, so a window yields several times more
+# propagation observations than Bitcoin does.
+LTC_MAGIC = bytes.fromhex("fbc0b6db")
+LTC_PORT = 9333
+LTC_SEEDS = ["seed-a.litecoin.loshan.co.uk", "dnsseed.thrasher.io",
+             "dnsseed.litecointools.com", "dnsseed.litecoinpool.org"]
+LTC_DATASET = "e25_ltc_block_propagation"
+LTC_PEER_DATASET = "e25_ltc_p2p_peers"
+LTC_FLOOR_DATASET = "e25_ltc_relay_floor"
+LTC_TX_DATASET = "e25_ltc_tx_propagation"
+
+
+# DOGECOIN targets a block a MINUTE, ten times Bitcoin's rate, which makes it the densest
+# propagation data of the four. Its mempool is nearly empty, so transactions are not sampled.
+DOGE_MAGIC = bytes.fromhex("c0c0c0c0")
+DOGE_PORT = 22556
+DOGE_SEEDS = ["seed.multidoge.org", "seed2.multidoge.org",
+              "seed.dogecoin.com", "seed.dogechain.info"]
+DOGE_DATASET = "e26_doge_block_propagation"
+DOGE_PEER_DATASET = "e26_doge_p2p_peers"
+DOGE_FLOOR_DATASET = "e26_doge_relay_floor"
+DOGE_TX_DATASET = "e26_doge_tx_propagation"
+
+# BITCOIN CASH shares Bitcoin's ten-minute cadence but not its node population: one window saw
+# Bitcoin Cash Node, Bitcoin ABC and Bitcoin SV peers on the same network at once.
+BCH_MAGIC = bytes.fromhex("e3e1f3e8")
+BCH_PORT = 8333
+BCH_SEEDS = ["seed.bitcoinabc.org", "btccash-seeder.bitcoinunlimited.info", "seed.bchd.cash"]
+BCH_DATASET = "e27_bch_block_propagation"
+BCH_PEER_DATASET = "e27_bch_p2p_peers"
+BCH_FLOOR_DATASET = "e27_bch_relay_floor"
+BCH_TX_DATASET = "e27_bch_tx_propagation"
+
+# SAMPLING IS SIZED PER CHAIN FROM MEASURED VOLUME, not set once and hoped. Announcements
+# counted over one 280s window, unsampled: Litecoin 19,225, Dogecoin 2,825, Bitcoin Cash 1,594,
+# against Bitcoin's 74,342. Left unsampled, Litecoin alone would write ~5.6M rows a day and
+# roughly double this project's storage, so it is cut to about one in ten. The two quiet chains
+# keep everything, which is what makes their propagation curves complete rather than partial.
+NO_SAMPLING = 256          # keep every announcement, for chains quiet enough to afford it
+LTC_TX_CUT = 26            # of 256, i.e. ~1 in 10
+
+
+def _dns_collector(seeds, port, magic, chain, target, tx_cut):
+    src = lambda n: dns_peer_list(seeds, port, n)
+    return BlockPropagationCollector(peers=src(target * 2), target=target,
+                                     magic=magic, chain=chain, refill=src, tx_cut=tx_cut)
+
+
+def make_ltc_collector(target: int = 60) -> "BlockPropagationCollector":
+    """A Litecoin collector, same class, different network."""
+    return _dns_collector(LTC_SEEDS, LTC_PORT, LTC_MAGIC, "ltc", target, LTC_TX_CUT)
+
+
+def make_doge_collector(target: int = 50) -> "BlockPropagationCollector":
+    return _dns_collector(DOGE_SEEDS, DOGE_PORT, DOGE_MAGIC, "doge", target, NO_SAMPLING)
+
+
+def make_bch_collector(target: int = 50) -> "BlockPropagationCollector":
+    return _dns_collector(BCH_SEEDS, BCH_PORT, BCH_MAGIC, "bch", target, NO_SAMPLING)
+
 # Dialling is sequential and blocking, so it is bounded per pass: unreachable peers are common
 # (roughly 2 in 3), and an unbounded loop starves the select() that actually collects data.
 CONNECTS_PER_PASS = 8
@@ -56,8 +119,8 @@ def _checksum(b: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(b).digest()).digest()[:4]
 
 
-def _msg(cmd: str, payload: bytes = b"") -> bytes:
-    return (MAGIC + cmd.encode().ljust(12, b"\x00")
+def _msg(cmd: str, payload: bytes = b"", magic: bytes = MAGIC) -> bytes:
+    return (magic + cmd.encode().ljust(12, b"\x00")
             + struct.pack("<I", len(payload)) + _checksum(payload) + payload)
 
 
@@ -112,10 +175,41 @@ def peer_list(limit: int = 150) -> list[tuple[str, int]]:
     return out[:limit]
 
 
+def dns_peer_list(seeds: list[str], port: int, limit: int = 150) -> list[tuple[str, int]]:
+    """Peers from DNS seeds, for a network with no Bitnodes-style crawler.
+
+    Seeds go stale: two of the four published Litecoin seeds no longer resolve. That is reported
+    by returning fewer peers rather than raising, and the caller sees the count.
+    """
+    out: set[tuple[str, int]] = set()
+    for host in seeds:
+        try:
+            for info in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+                out.add((info[4][0], port))
+        except Exception:
+            continue
+    peers = list(out)
+    random.shuffle(peers)
+    return peers[:limit]
+
+
 class BlockPropagationCollector:
-    def __init__(self, peers=None, target: int = 120) -> None:
+    def __init__(self, peers=None, target: int = 120, magic: bytes = MAGIC,
+                 chain: str = "btc", refill=None, tx_cut: int = TX_SAMPLE_CUT) -> None:
         self.target = target
-        self.peers = peers if peers is not None else peer_list(target * 2)
+        # The network magic prefixes every frame and is how a Litecoin peer is told apart from a
+        # Bitcoin one on the wire. Kept per instance so one process can hold both.
+        self.magic = magic
+        self.chain = chain
+        # Sampling rate for transaction announcements, out of 256. Bitcoin needs 1-in-64 because
+        # announcements arrive in the thousands per second. A quieter chain does not: Dogecoin
+        # carried 1,080 announcements of about 22 DISTINCT transactions in one window, where
+        # 1-in-64 expects 0.34 and duly produced none. Set to 256 there to keep everything.
+        self.tx_cut = tx_cut
+        # How to top the peer set back up. Bitcoin uses the Bitnodes crawler; a network without
+        # one passes a callable over its DNS seeds instead.
+        self._refill_fn = refill or (lambda n: peer_list(n))
+        self.peers = peers if peers is not None else self._refill_fn(target * 2)
         self.conns: dict[tuple, socket.socket] = {}
         self.bufs: dict[tuple, bytes] = {}
         self.state: dict[tuple, dict] = {}
@@ -135,7 +229,7 @@ class BlockPropagationCollector:
         host, port = key
         try:
             s = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_S)
-            s.sendall(_msg("version", _version_payload()))
+            s.sendall(_msg("version", _version_payload(), self.magic))
             s.setblocking(False)
             self.conns[key] = s
             self.bufs[key] = b""
@@ -170,7 +264,7 @@ class BlockPropagationCollector:
             except Exception:
                 pass
             try:
-                self.conns[key].sendall(_msg("verack"))
+                self.conns[key].sendall(_msg("verack", b"", self.magic))
             except Exception:
                 self._drop(key)
         elif cmd == "verack":
@@ -182,7 +276,7 @@ class BlockPropagationCollector:
                     # to us rather than announce-then-wait. That is what makes the timing a
                     # propagation measurement rather than a round-trip measurement.
                     self.conns[key].sendall(
-                        _msg("sendcmpct", struct.pack("<BQ", 1, 2)))
+                        _msg("sendcmpct", struct.pack("<BQ", 1, 2), self.magic))
                 except Exception:
                     self._drop(key)
         elif cmd == "feefilter" and len(payload) >= 8:
@@ -198,7 +292,7 @@ class BlockPropagationCollector:
             })
         elif cmd == "ping":
             try:
-                self.conns[key].sendall(_msg("pong", payload))
+                self.conns[key].sendall(_msg("pong", payload, self.magic))
             except Exception:
                 self._drop(key)
         elif cmd in ("cmpctblock", "headers"):
@@ -256,7 +350,7 @@ class BlockPropagationCollector:
                     # Sampled on the hash itself, so every peer's view of the same transaction is
                     # either all in or all out. We never send getdata for these: the body is on
                     # chain once mined and is not what this measures -- the TIMING is.
-                    if int(h[:2], 16) >= TX_SAMPLE_CUT:
+                    if int(h[:2], 16) >= self.tx_cut:
                         continue
                     k = (h, key)
                     if k in self.tx_seen:
@@ -317,7 +411,8 @@ class BlockPropagationCollector:
                     # would hammer the crawler and stall the loop.
                     if time.time() - self._last_refill >= REFILL_COOLDOWN_S:
                         self._last_refill = time.time()
-                        pool = [p for p in peer_list(self.target * 3) if p not in self.state]
+                        pool = [p for p in self._refill_fn(self.target * 3)
+                                if p not in self.state]
                     if not pool:
                         break
                 continue
@@ -343,8 +438,8 @@ class BlockPropagationCollector:
                     continue
                 buf = self.bufs[key] + chunk
                 while len(buf) >= 24:
-                    if buf[:4] != MAGIC:
-                        cut = buf.find(MAGIC, 1)
+                    if buf[:4] != self.magic:
+                        cut = buf.find(self.magic, 1)
                         if cut == -1:
                             buf = b""
                             break

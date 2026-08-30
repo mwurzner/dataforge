@@ -345,6 +345,17 @@ def main() -> int:
     strat = e19_stratum.StratumJobCollector()
     sdirect = e20_stratum_direct.DirectStratumCollector()
     p2p = e21_btc_p2p.BlockPropagationCollector(target=120)
+    # Three more networks on the same wire protocol and the same class. They are cheap:
+    # each holds a few dozen sockets and the threads are almost entirely idle on the network.
+    altp2p = [
+        (e21_btc_p2p.make_ltc_collector(target=60), "ltc", e21_btc_p2p.LTC_DATASET,
+         e21_btc_p2p.LTC_PEER_DATASET, e21_btc_p2p.LTC_FLOOR_DATASET, e21_btc_p2p.LTC_TX_DATASET),
+        (e21_btc_p2p.make_doge_collector(target=50), "doge", e21_btc_p2p.DOGE_DATASET,
+         e21_btc_p2p.DOGE_PEER_DATASET, e21_btc_p2p.DOGE_FLOOR_DATASET,
+         e21_btc_p2p.DOGE_TX_DATASET),
+        (e21_btc_p2p.make_bch_collector(target=50), "bch", e21_btc_p2p.BCH_DATASET,
+         e21_btc_p2p.BCH_PEER_DATASET, e21_btc_p2p.BCH_FLOOR_DATASET, e21_btc_p2p.BCH_TX_DATASET),
+    ]
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
     preconf = e14_preconf.make_watchers()
@@ -403,6 +414,9 @@ def main() -> int:
     p2p_thread = threading.Thread(target=_p2p_reader, args=(p2p, fee_stop, failures),
                                   name="btc-p2p", daemon=True)
     p2p_thread.start()
+    for _c, _name, *_ in altp2p:
+        threading.Thread(target=_p2p_reader, args=(_c, fee_stop, failures),
+                         name=f"{_name}-p2p", daemon=True).start()
     preconf_thread = threading.Thread(target=_preconf_sampler,
                                       args=(preconf, fee_stop, failures),
                                       name="l2-preconf", daemon=True)
@@ -718,6 +732,15 @@ def main() -> int:
               f"({multi:,} seen by >1 peer) | {p2p.n_tx_inv:,} inv total, capped {p2p.n_tx_capped}",
               flush=True)
         write(e21_btc_p2p.TX_DATASET, tdf, run_id)
+
+    for c, name, ds, peer_ds, floor_ds, tx_ds in altp2p:
+        for target, frame in ((ds, c.frame()), (peer_ds, c.peer_frame()),
+                              (floor_ds, c.floor_frame()), (tx_ds, c.tx_frame())):
+            if len(frame):
+                write(target, frame, run_id)
+        print(f"  {name}: {len(c.frame()):,} block announcements, "
+              f"{len(c.tx_frame()):,} tx announcements, {len(c.floor_frame())} floors "
+              f"| handshakes {c.n_handshakes} held {len(c.state)}", flush=True)
 
     fdf = p2p.floor_frame()
     if len(fdf):
