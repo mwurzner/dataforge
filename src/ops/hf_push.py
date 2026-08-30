@@ -179,9 +179,9 @@ ODC-BY: use it freely, credit "DataForge (dataforge-labs)". Questions and reques
 history via the discussions tab.
 """
 
-MINING_CARD = '''# Bitcoin mining pool templates and block propagation
+MINING_CARD = '''# Bitcoin mining pool templates
 
-What each mining pool is building on, and how quickly the network learns a new block exists.
+What each mining pool is building on, at the moment it was building it.
 
 Pools issue work to their miners describing the block they are extending, the coinbase they will
 claim, and whether previous work should be abandoned. That work is replaced every few seconds.
@@ -192,8 +192,6 @@ Once a block is found, the templates every pool was building are gone.
 | name | one row is |
 |---|---|
 | `e20_stratum_jobs_direct` | one job from one pool: the block it extends, its nTime, coinbase, merkle branch count and clean-jobs flag |
-| `e21_btc_block_propagation` | one peer announcing one block, timestamped |
-| `e21_btc_p2p_peers` | one peer connected to: user agent, services, whether it completed a handshake |
 
 ## Templates
 
@@ -206,32 +204,10 @@ the same moment. Two endpoints run by the same operator differed by 10 seconds.
 `pool` is the endpoint connected to rather than an identity inferred from the data. `operator`
 collapses endpoints belonging to the same operator, and rows should usually be grouped on it.
 
-## Propagation
-
-Connections are held to roughly 120 peers and each announcement of a new block is timestamped.
-Sorting one block's rows by `received_ts` gives its propagation curve.
-
-Across four blocks in one window:
-
-| peers | first to median | full spread |
-|---|---|---|
-| 32 | 0.39s | 3.74s |
-| 31 | 0.27s | 2.00s |
-| 33 | 0.45s | 52.37s |
-
-Half the peers are reached within about half a second. The tail is the interesting part: in the
-third block one peer was 52 seconds behind. Nothing on chain records that, because a block
-carries only the timestamp its miner claimed.
-
 ## Before you build on this
 
-- Propagation times are ours and include network distance to each peer, which varies with
-  geography. Differences of milliseconds are partly distance; differences of seconds are not.
-  `peer_addr` is retained so this can be controlled for.
 - One vantage point, roughly 120 peers out of tens of thousands reachable. This is a sample of
   the network, not the network.
-- A peer that disconnects stops announcing, which resembles slowness. `e21_btc_p2p_peers` carries
-  handshake state so a gap can be told from a silence.
 - nTime is the pool's own clock and pools do not all update it on the same cadence. It indicates
   when a pool rebuilt its template. For arrival ordering use `observed_ts`, which is consistent
   across pools.
@@ -299,8 +275,7 @@ suspect the collection before the network.
 
 PRODUCTS = {
     "bitcoin-mining-pool-templates": {
-        "datasets": ["e20_stratum_jobs_direct", "e21_btc_block_propagation",
-                     "e21_btc_p2p_peers", MANIFEST],
+        "datasets": ["e20_stratum_jobs_direct", MANIFEST],
         "example": "e20_stratum_jobs_direct",
         "pretty": "What each Bitcoin mining pool is building on, second by second",
         "tags": ["bitcoin", "mining", "mining-pools", "stratum", "p2p", "network",
@@ -360,7 +335,7 @@ equity book live, with marks moving while their indices barely did.
 ## Before you build on this
 
 - The mark is the venue's own, used for margining. It is not necessarily a traded price, and
-  `e17_perp_depth` is where a few of these instruments' actual books are.
+  a few of these instruments' books are in the separate `crypto-execution-costs` repo.
 - How the index is derived for an equity while its cash market is closed is the venue's
   business and is not modelled here. It was observed to move slightly even on a Saturday, so
   treat it as the venue's reference rather than a last cash close.
@@ -442,12 +417,120 @@ A one-sided book is a real state and is recorded as one, with the missing side n
   distinct `expiry` per day rather than assuming a fixed ladder.
 """,
     },
+    "ethereum-mempool": {
+        "datasets": ["e1_mempool_minutely", "e1_mempool_dropped", "e1_mempool_lifecycle",
+                     "e3_mempool_divergence", MANIFEST],
+        "example": "e1_mempool_minutely",
+        "pretty": "Ethereum pending transactions, dwell times and drops",
+        "tags": ["mempool", "ethereum", "transactions", "blockchain", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Ethereum mempool
+
+Transactions seen pending on Ethereum: how long they waited, and which of them were never mined
+at all.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e1_mempool_minutely` | one minute of pending-set activity |
+| `e1_mempool_dropped` | a transaction seen pending that never reached a block |
+| `e1_mempool_lifecycle` | a transaction seen pending, per transaction (ends 2026-08-26, see below) |
+| `e3_mempool_divergence` | one comparison of pending sets across several independent views |
+
+## Read this before you use it
+
+The Flashbots Mempool Dumpster publishes the same measurement daily under CC-0, from a wider
+node set and with a longer history. For most Ethereum questions theirs is the better source and
+you should use it.
+
+What this adds is a SECOND, independent observer. A dwell time is only meaningful against
+somebody else's dwell time, and `e3_mempool_divergence` exists to size how much two views of the
+pending set actually disagree. If you are checking a result against another source rather than
+looking for the deepest single feed, that is what this is for.
+
+`e1_mempool_lifecycle` stops at 2026-08-26. Per-transaction rows were discontinued there for
+exactly the reason above: duplicating a freely available measurement was not worth the storage it
+took. `e1_mempool_minutely` and `e1_mempool_dropped` continue, and the dropped rows are the part
+with no free equivalent, because a transaction that is never mined leaves no on-chain record.
+
+## Before you build on this
+
+- Pending sets are node-local. What one view holds is not what the network holds, and retention
+  is a configuration choice rather than a protocol rule.
+- `dropped` means confirmed absent from the chain, absent from every pending view held, and still
+  absent after a debounce period. It is never inferred from a single observation.
+- Timestamps are ours, taken at observation. They are not consensus timestamps and carry our
+  network distance to whatever served the data.
+- The minutely table is an aggregate by construction. If you need per-transaction Ethereum rows
+  for a date after 2026-08-26, the Dumpster has them and this does not.
+""",
+    },
+    "bitcoin-network-propagation": {
+        "datasets": ["e21_btc_block_propagation", "e21_btc_tx_propagation",
+                     "e21_btc_relay_floor", "e21_btc_p2p_peers", MANIFEST],
+        "example": "e21_btc_block_propagation",
+        "pretty": "Bitcoin block and transaction propagation across the peer network",
+        "tags": ["bitcoin", "peer-to-peer", "propagation", "networking", "latency",
+                 "blockchain", "time-series"],
+        "size": "1M<n<10M",
+        "body": """# Bitcoin network propagation
+
+How fast the Bitcoin peer network learns things, measured from connections held to roughly 120
+peers at once.
+
+Nothing here can be reconstructed later. A block carries only the timestamp its miner claimed, an
+announcement carries none at all, and a peer's own relay policy is broadcast and forgotten.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e21_btc_block_propagation` | one peer announcing one block, timestamped |
+| `e21_btc_tx_propagation` | one peer announcing one sampled transaction, timestamped |
+| `e21_btc_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
+| `e21_btc_p2p_peers` | one peer connected to: user agent, services, handshake state |
+
+## Blocks against transactions
+
+These propagate on completely different timescales, and the contrast is the point.
+
+Across four blocks in one window, half the peers had a new block within about 0.4 seconds, with a
+tail out to 52 seconds on one peer. Transactions took a median of about 23 seconds between the
+first and last peer, p90 71 seconds, and a maximum of 103.
+
+That gap is not congestion. Nodes deliberately randomise transaction announcement timing so that
+a watching node cannot work out where a transaction entered the network. Blocks get no such
+treatment, because there is nothing to hide. So the transaction table measures a privacy
+mechanism and the block table measures raw relay speed.
+
+## Sampling and floors
+
+Transactions are sampled by txid, roughly one in sixty-four, because announcements otherwise
+arrive in the thousands per second. The test is a property of the hash, so it is the same on
+every peer and a curve is never truncated by when we started watching. Only the announcement is
+recorded; the body is never requested and is on chain anyway once mined.
+
+`e21_btc_relay_floor` is the other half of whether a transaction can move at all. Below a peer's
+minimum relay fee it is not forwarded, so it never reaches a miner. One sample of 41 peers held 8
+distinct floors, with only 34% at the common 1.0 sat/vB default, 56% below it and 10% above. The
+non-round values are nodes whose own mempool is evicting.
+
+## Before you build on this
+
+- Timings are ours and include network distance to each peer, which varies with geography.
+  Differences of milliseconds are partly distance; differences of seconds are not. `peer_addr` is
+  retained so this can be controlled for.
+- Roughly 120 peers out of tens of thousands reachable. A sample of the network, not the network.
+- A peer that disconnects stops announcing, which resembles slowness. `e21_btc_p2p_peers` carries
+  handshake state so a gap can be told from a silence.
+- Relay floors flatten while the mempool is quiet, because nodes then sit at whatever they were
+  configured with. They move when a mempool fills, which is when they matter.
+""",
+    },
     "bitcoin-mempool-lifecycle": {
         "datasets": ["e8_btc_mempool_lifecycle", "e9_btc_mempool_divergence",
-                     "e11_ltc_mempool_lifecycle", "e15_fee_estimators",
-                     "e1_mempool_minutely", "e1_mempool_dropped", "e1_mempool_lifecycle",
-                     "e3_mempool_divergence", "e21_btc_relay_floor",
-                     "e21_btc_tx_propagation", MANIFEST],
+                     "e11_ltc_mempool_lifecycle", "e15_fee_estimators", MANIFEST],
         "example": "e8_btc_mempool_lifecycle",
         "pretty": "Bitcoin mempool lifecycle, dwell times and fee estimates",
         "tags": ["mempool", "transaction-fees", "fee-estimation", "bitcoin", "litecoin",
@@ -469,18 +552,9 @@ leaves no record at all. Both are recorded here as they happen.
 | `e9_btc_mempool_divergence` | one view of the pending set at one instant, sized and compared against the others |
 | `e11_ltc_mempool_lifecycle` | the same, for Litecoin |
 | `e15_fee_estimators` | one fee estimate from one provider at one moment, with its target |
-| `e1_mempool_lifecycle` | an Ethereum transaction seen pending (ends 2026-08-26, see below) |
-| `e1_mempool_minutely` | one minute of Ethereum mempool activity |
-| `e1_mempool_dropped` | an Ethereum transaction that was never mined |
-| `e3_mempool_divergence` | Ethereum pending-set comparison across views |
-| `e21_btc_relay_floor` | one peer's own minimum relay fee, at the moment it announced it |
-| `e21_btc_tx_propagation` | one peer announcing one transaction, timestamped |
 
-`e1_mempool_lifecycle` stops at 2026-08-26. Per-transaction Ethereum rows were discontinued
-there: the Flashbots Mempool Dumpster publishes the same measurement under CC-0 from a wider
-node set, so a duplicate was not worth the storage it took. `e1_mempool_minutely` and
-`e1_mempool_dropped` continue. The earlier partitions are kept and keep their own name, so
-nothing joins them to the newer tables and reads a change of population as a trend.
+Ethereum moved to its own repo, `ethereum-mempool`, rather than sitting inside a Bitcoin panel.
+Peer-to-peer propagation and relay floors likewise moved to `bitcoin-network-propagation`.
 
 ## Fee rate coverage
 
@@ -538,40 +612,6 @@ a child shows up. The descendant columns are the mirror: what is waiting on this
 These come from a full node's own view, so they are null for transactions it never held, and
 they are recorded as first observed. Package structure changes as parents confirm, so treat
 them as the state at first sight rather than a running value.
-
-## How fast a transaction spreads
-
-`e21_btc_tx_propagation` timestamps each peer's announcement of a sampled transaction, from
-connections held to roughly 120 peers. Sorting one txid's rows by `received_ts` gives its
-propagation curve, and `delay_from_first_s` is measured against the earliest peer we heard it
-from, which is the only reference available: broadcast time is not observable.
-
-Expect this to be far slower than block propagation, and that is the network working as
-designed rather than a measurement problem. Nodes randomise announcement timing to make it hard
-to trace where a transaction entered the network, so an early observation ran to a median of
-about 23 seconds between the first and last peer against roughly 0.4 seconds for a block.
-
-Transactions are SAMPLED, not captured whole: a txid is tracked when its leading byte-pair falls
-below a fixed cut, taking about one in sixty-four. The test is a property of the hash, so it is
-the same on every peer and a curve is never truncated by when we started watching. Announcement
-volume is otherwise thousands per second.
-
-Only the announcement is collected. The transaction body is never requested, and it is on chain
-anyway once mined; the timing is the part that is not.
-
-## Relay floors
-
-A transaction below a node's minimum relay fee is not merely deprioritised: that node will not
-forward it, so it never reaches the miners at all. Every peer announces its own floor on
-connect and again whenever it moves, and those announcements are kept by nobody.
-
-`e21_btc_relay_floor` is one row per announcement, so a peer appears repeatedly as its floor
-changes. `min_relay_fee_sat_kvb` is the wire value; `min_relay_fee_sat_vb` is the same number
-in the units fee tools quote.
-
-Expect little variation while the mempool is quiet, because nodes then sit at whatever they
-were configured with. The floor moves when a mempool fills and starts evicting, which is
-exactly when it matters and exactly when it cannot be reconstructed afterwards.
 
 ## Before you build on this
 
