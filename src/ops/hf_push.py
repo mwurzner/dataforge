@@ -10,6 +10,7 @@ So the split is by AUDIENCE, not by dataset count:
 
     bitcoin-mempool-lifecycle       what happens to transactions before they confirm
     bitcoin-fee-estimator-accuracy  what estimators advised against what blocks required
+    ethereum-gas-estimator-accuracy the same question on Ethereum, across RPC providers
     crypto-execution-costs          what it costs to move money, quoted and compared
     remittance-pricing-panel        what banks and money transmitters charge, corridor by corridor
     bitcoin-mining-pool-templates   what pools are building on, and how blocks propagate
@@ -127,6 +128,8 @@ WINDOWED = {
     "e10_quote_benchmark", "e11_ltc_mempool_lifecycle", "e12_onramp_quotes",
     "e13_remittance_quotes", "e14_l2_preconf", "e15_fee_estimators",
     "e16_dex_routes", "e17_perp_depth", "e28_fee_estimator_accuracy",
+    "e29_gas_estimators", "e29_eth_block_fees",
+    "e30_gas_estimator_accuracy",
     "e18_attestation_pool", "e20_stratum_jobs_direct",
     "e21_btc_block_propagation", "e21_btc_p2p_peers",
     "e22_options_surface", "e22_options_book", "e21_btc_relay_floor",
@@ -786,6 +789,92 @@ to a pool, and those measure a private arrangement rather than a market.
   than pooled across months.
 - `lead_seconds` records how far ahead of the block each forecast was actually made. Matching is
   to the newest forecast at or before the target moment, so this varies with sampling cadence.
+""",
+    },
+    "ethereum-gas-estimator-accuracy": {
+        "datasets": ["e29_gas_estimators", "e29_eth_block_fees",
+                     "e30_gas_estimator_accuracy", MANIFEST],
+        "example": "e30_gas_estimator_accuracy",
+        "pretty": "What RPC providers suggested for gas, against what blocks required",
+        "tags": ["ethereum", "gas", "gas-price", "fee-estimation", "rpc",
+                 "benchmark", "blockchain", "time-series"],
+        "size": "100K<n<1M",
+        "body": """# Ethereum gas estimator accuracy
+
+What seven independent RPC providers suggested you pay for gas, and what the block actually
+required.
+
+Suggestions are the perishable half. Every provider answers `eth_gasPrice` and
+`eth_maxPriorityFeePerGas` for right now, computed by that node from its own mempool view, and
+none of them publishes a history of its own answers. No archive holds a historical mempool, so a
+suggestion made last month exists only if somebody recorded it at the time. What a block actually
+required, by contrast, is on chain forever. That asymmetry is why this join can be published at
+all: anyone can recompute the outcome, and nobody can go back and find out what was advised.
+
+## Contents
+
+| name | one row is |
+|---|---|
+| `e29_gas_estimators` | one provider's gas suggestion at one moment, tagged with the block it was standing on |
+| `e29_eth_block_fees` | one block: base fee, priority-fee percentiles actually paid, gas used ratio |
+| `e30_gas_estimator_accuracy` | one provider's suggestion scored against the block it was advice about |
+
+## The providers disagree, and the disagreement is not latency
+
+This was the first thing checked, because it is the way the dataset could have been worthless. An
+early pass showed a 6.3% spread while two of four providers sat one block behind, which would have
+made this a latency measurement wearing a disagreement costume. Comparing providers strictly
+within the same block, over six consecutive blocks:
+
+| quantity | median within-block spread |
+|---|---|
+| `eth_gasPrice` | 7.3% (max 9.4%) |
+| `eth_maxPriorityFeePerGas` | 100%, on every block |
+
+It is systematic rather than noisy. One provider returned a zero priority fee on every block
+sampled and another on most, while the rest agreed on a real value. Two of the disagreeing
+endpoints are MEV-protection RPCs that see genuinely different order flow, so this is a difference
+in what each node can see, not sampling error.
+
+## Reading the accuracy table
+
+`sufficient_priority` answers the only question a wallet actually asks: would paying that
+suggestion have got the transaction into a block within the horizon. `overpay_priority` is the
+suggestion divided by what cleared, so 1.0 is exact and 3.0 means paying triple.
+
+Matching needs no timestamps, which removes the usual way this kind of join goes wrong. Every
+suggestion carries the head block the provider reported at the moment it answered, so a suggestion
+made at head N is by construction advice about block N+1, and it is scored against blocks N+1
+through N+3. Matching on wall-clock time would have to guess at propagation and sampling lag.
+
+## What counts as the rate that cleared
+
+`cleared_p10_gwei` is the 10th percentile of priority fees actually paid by transactions in the
+block, from `eth_feeHistory`. Not the minimum: blocks routinely include zero-priority transactions
+placed by builders or delivered privately, and those measure a private arrangement rather than the
+price a stranger would have had to pay. The 5th percentile and the median travel alongside so you
+can pick a different definition rather than accept ours.
+
+A cleared rate of exactly zero is common and genuine. It means the block accepted at least a tenth
+of its transactions at no tip at all, so sufficiency is trivially true and the overpay ratio is
+undefined rather than infinite. Those rows carry a null, never a large number.
+
+## Before you build on this
+
+- Ethereum mainnet only, and that is a measured decision rather than an omission. The L2s were
+  probed and show no cross-provider spread worth recording: Base 0.0%, Optimism 0.0%, Polygon
+  0.0%, Arbitrum 0.3%. One sequencer posts one number and every node echoes it.
+- Seven providers, and they are the ones that answer without an API key. That is a selection, and
+  it skews toward endpoints that serve retail wallets rather than institutional order flow.
+- A provider that fails is recorded with an error, never as a zero suggestion. A failed read and a
+  genuine zero tip are different facts and the panel keeps them apart.
+- The spread is measured in percent, and Ethereum has been quiet during early collection. A 7%
+  spread on a 0.5 gwei base is a few hundred wei. Whether divergence widens under congestion, when
+  mempool views differ most, is exactly what a long panel answers and a short one cannot.
+- Suggestions are sampled every 20 seconds against roughly 12 second blocks, so most blocks are
+  covered but not all. `head_block` is on every row, so coverage is checkable rather than assumed.
+- `e29_eth_block_fees` is the freely available half. It is carried so the join is self contained,
+  not because it is scarce.
 """,
     },
     "bitcoin-mempool-lifecycle": {
