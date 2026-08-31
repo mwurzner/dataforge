@@ -44,7 +44,7 @@ from src.ephemeral import (e1_mempool, e3_divergence, e8_btc_mempool, e10_quotes
                            e12_onramp, e13_remit, e14_preconf, e15_feeest,
                            e17_perpdepth, e18_attpool, e19_stratum, e20_stratum_direct,
                            e22_options_surface, e23_perp_mark, e24_solana_quotes,
-                           e28_fee_accuracy,
+                           e28_fee_accuracy, e29_gas_estimators, e30_gas_accuracy,
                            e21_btc_p2p)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +57,13 @@ DIVERGENCE_EVERY_S = float(os.environ.get("DF_DIVERGENCE_EVERY_S", 300))
 BTC_POLL_S = float(os.environ.get("DF_BTC_POLL_S", 60))
 BTC_BLOCK_EVERY_S = float(os.environ.get("DF_BTC_BLOCK_EVERY_S", 120))
 BTC_DIVERGENCE_EVERY_S = float(os.environ.get("DF_BTC_DIVERGENCE_EVERY_S", 900))
+# E29 gas suggestions. Blocks arrive every ~12s, so 30s covers roughly 40% of them, which is
+# ample for a divergence panel, while keeping the load on each free public RPC to one ordinary
+# request per 30s per host. Politeness is not decoration here: merkle 429d at every cadence tested
+# down to 45s after this module probed it hard, and these are the same free endpoints the rest of
+# the project depends on.
+GAS_EVERY_S = float(os.environ.get("DF_GAS_EVERY_S", 30))
+GAS_BLOCKS_EVERY_S = float(os.environ.get("DF_GAS_BLOCKS_EVERY_S", 60))
 # E10 quote benchmark. One round is 24 requests against free public endpoints, so 15 minutes keeps
 # us at ordinary-client volume (~2,300/day) rather than hammering somebody's free service.
 QUOTE_EVERY_S = float(os.environ.get("DF_QUOTE_EVERY_S", 900))
@@ -268,6 +275,39 @@ def _pre_fee_sampler(btc, stop: "threading.Event", failures: list) -> None:
         stop.wait(PRE_FEE_EVERY_S)
 
 
+def _gas_sampler(gas_rows: list, block_rows: list, stop: "threading.Event",
+                 failures: list) -> None:
+    """Sample every RPC provider's gas suggestion on its own clock.
+
+    Own thread for the same reason as the fee sampler: seven sequential HTTP calls take ~1.5s and
+    the main loop must not wait on them. Thread-safe by inspection -- it appends to two lists that
+    nothing else writes, and the main thread reads them only after fee_stop is set.
+
+    The two cadences are different on purpose. Suggestions are the ephemeral half and are sampled
+    every GAS_EVERY_S; block fees are on-chain and backfillable by anyone, so they are fetched
+    less often and only as a convenience so the accuracy join is self-contained. eth_feeHistory
+    returns a window of blocks, so a 60s cadence over ~12s blocks overlaps and cannot leave a gap.
+    """
+    last_blocks = 0.0
+    while not stop.is_set():
+        try:
+            gas_rows.append(e29_gas_estimators.sample())
+        except Exception as exc:
+            if len(failures) < 200:
+                failures.append(f"e29: {exc}")
+        now = time.time()
+        if now - last_blocks >= GAS_BLOCKS_EVERY_S:
+            try:
+                bf = e29_gas_estimators.block_fees(n=20)
+                if len(bf):
+                    block_rows.append(bf)
+            except Exception as exc:
+                if len(failures) < 200:
+                    failures.append(f"e29 blocks: {exc}")
+            last_blocks = now
+        stop.wait(GAS_EVERY_S)
+
+
 def _quote_round():
     """Every quote-shaped collector, run OFF the main loop.
 
@@ -369,6 +409,8 @@ def main() -> int:
     last_ltc = last_ltc_block = 0.0
     last_fee = last_fee_sample = 0.0
     fee_rows: list[pd.DataFrame] = []
+    gas_rows: list[pd.DataFrame] = []
+    gas_block_rows: list[pd.DataFrame] = []
     quote_rows: list[pd.DataFrame] = []
     route_rows: list[pd.DataFrame] = []
     depth_rows: list[pd.DataFrame] = []
@@ -398,6 +440,10 @@ def main() -> int:
     fee_thread = threading.Thread(target=_fee_sampler, args=(btc, fee_stop, failures, ltc),
                                   name="fee-sampler", daemon=True)
     fee_thread.start()
+    gas_thread = threading.Thread(
+        target=_gas_sampler, args=(gas_rows, gas_block_rows, fee_stop, failures),
+        name="gas-sampler", daemon=True)
+    gas_thread.start()
     pre_fee_thread = threading.Thread(target=_pre_fee_sampler, args=(btc, fee_stop, failures),
                                       name="pre-fee-sampler", daemon=True)
     pre_fee_thread.start()
@@ -681,6 +727,35 @@ def main() -> int:
                   f"{100*ok_acc.sufficient.mean():.0f}% | median overpay "
                   f"{acc.overpay_ratio.median():.2f}x", flush=True)
             write(e28_fee_accuracy.DATASET, acc, run_id)
+
+    if gas_rows:
+        gdf = pd.concat(gas_rows, ignore_index=True)
+        okg = gdf[gdf.gas_price_wei.notna()]
+        psp = pd.to_numeric(gdf.priority_spread_pct, errors="coerce").dropna()
+        print(f"  E29: {len(okg):,} gas suggestions from {okg.provider.nunique()} providers, "
+              f"{int(gdf.error.notna().sum())} errors | median within-block priority spread "
+              f"{psp.median():.0f}%" if len(psp) else
+              f"  E29: {len(okg):,} gas suggestions", flush=True)
+        write(e29_gas_estimators.DATASET, gdf, run_id)
+
+        gbdf = (pd.concat(gas_block_rows, ignore_index=True)
+                .drop_duplicates(subset="block_number", keep="last")
+                if gas_block_rows else pd.DataFrame())
+        if len(gbdf):
+            print(f"  E29 blocks: {len(gbdf):,} blocks of fee history", flush=True)
+            write(e29_gas_estimators.BLOCK_DATASET, gbdf, run_id)
+
+        # DERIVED, costing no requests: matched on block height rather than wall-clock time, so a
+        # suggestion made at head N is scored against the block N+h it was advice about.
+        gacc = e30_gas_accuracy.build(gdf, gbdf)
+        if len(gacc):
+            h1 = gacc[gacc.horizon_blocks == 1]
+            suff = h1.sufficient_priority.mean() if len(h1) else float("nan")
+            print(f"  E30: {len(gacc):,} suggestion-vs-outcome rows over "
+                  f"{gacc.target_block.nunique()} blocks | next-block sufficient "
+                  f"{100*suff:.0f}% | median overpay "
+                  f"{gacc.overpay_priority.median():.2f}x", flush=True)
+            write(e30_gas_accuracy.DATASET, gacc, run_id)
 
     pfs = []
     for w in preconf.values():
