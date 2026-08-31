@@ -14,6 +14,11 @@ TWO RULES THAT MAKE IT SAFE:
   1. NOTHING IS PRUNED UNLESS THE FULL PUSH SUCCEEDED. hf_push writes a receipt naming the
      datasets it actually uploaded; a dataset missing from the receipt is never touched. A prune
      that ran on a failed push would destroy the only copy.
+  3. NOTHING INSIDE A PUBLISHED SAMPLE WINDOW IS EVER PRUNED. The public repos are re-staged
+     from this checkout on every run, so pruning a partition the sample still needs would make
+     the next mirroring push DELETE it from the public repo. With a 14-day buffer and a sample
+     pinned to each dataset's first days, that would have started silently eroding the flagship
+     Bitcoin sample around 2026-09-09.
   2. LIGHT DATASETS ARE NEVER PRUNED. The manifests and divergence samples are kilobytes, and
      they are what makes a gap DETECTABLE later. Losing the heavy rows is recoverable from HF;
      losing the record of what was collected is not.
@@ -61,8 +66,19 @@ def main() -> int:
     print(f"  receipt {receipt.get('pushed_at')} | retaining {RETAIN_DAYS}d "
           f"(cutoff {cutoff})", flush=True)
 
+    # Resolve the protected windows. If this cannot be determined, prune NOTHING: not knowing
+    # what is protected is exactly when deleting is most dangerous.
+    try:
+        sys.path.insert(0, str(ROOT))
+        from src.ops.hf_push import dataset_window
+    except Exception as exc:
+        print(f"  cannot resolve sample windows ({type(exc).__name__}: {exc}) -- refusing to "
+              f"prune", flush=True)
+        return 0
+
     freed = 0
     removed = 0
+    kept_sample = 0
     for ds in sorted(HEAVY):
         root = DATA / ds
         if not root.exists():
@@ -70,14 +86,21 @@ def main() -> int:
         if ds not in pushed:
             print(f"    {ds}: NOT in the receipt -- skipped", flush=True)
             continue
+        prot = dataset_window(ds)
         for f in sorted(root.rglob("*.parquet")):
             # Partition stems are YYYY-MM-DD or YYYY-MM-DDTHHMMZ; both sort by date.
-            if f.stem[:10] < cutoff:
-                freed += f.stat().st_size
-                f.unlink()
-                removed += 1
+            day = f.stem[:10]
+            if day >= cutoff:
+                continue
+            if prot is not None and prot[0] <= day <= prot[1]:
+                kept_sample += 1
+                continue
+            freed += f.stat().st_size
+            f.unlink()
+            removed += 1
     print(f"    pruned {removed} partitions, {freed/1e6:.1f} MB freed "
-          f"(full history remains on HuggingFace)", flush=True)
+          f"({kept_sample} kept because they are inside a published sample window; "
+          f"full history remains on HuggingFace)", flush=True)
     return 0
 
 

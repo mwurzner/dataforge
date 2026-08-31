@@ -57,32 +57,106 @@ ARCHIVE_REPO = f"{OWNER}/dataforge-ephemeral"          # private, everything, ne
 #
 # A frozen week shows schema, coverage and quality, and returning weekly yields nothing new.
 #
-# RE-PINNED QUARTERLY, and that cadence is the compromise. A window frozen forever eventually
-# looks abandoned: a browser arriving in December sees August files and assumes the project died.
-# A window that moves weekly leaks the whole backlog. Re-pinning four times a year gives up about
+# FROZEN FOREVER, PER DATASET, AND THERE IS NO RE-PIN CHORE. The quarterly cadence this file used
+# to prescribe defended against exactly one thing -- "a browser arriving in December sees August
+# files and assumes the project died" -- and that worry is already answered below by publishing
+# e0_run_manifest IN FULL, never windowed. Liveness is proven by the manifest and by the repo's
+# own last-modified stamp, so rotating the sample bought nothing while costing ~28 days of free
+# data a year plus a recurring manual chore that would eventually be missed.
+#
+# EACH DATASET GETS ITS OWN SAMPLE_DAYS FROM ITS OWN FIRST DAY. A single global range gave the
+# datasets built last a one-to-three day sample while the oldest had seven, so the newest and most
+# distinctive repos looked abandoned at birth.
+#
+# THE PINS ARE EXPLICIT RATHER THAN DERIVED FROM THE FILES ON DISK, which is the subtle part.
+# Deriving "the first seven dates present" is the natural implementation and it breaks silently:
+# prune_git trims the two HEAVY datasets to a 14-day rolling buffer, so a derived start would
+# creep forward as old partitions were pruned and the frozen sample would quietly become a rolling
+# one -- the exact leak this design exists to prevent. Explicit dates in git cannot slide, and
+# prune_git now refuses to delete anything inside a sample window, which keeps the two consistent.
+#
+# ADDING A DATASET: add one line here when you add it to WINDOWED. A windowed dataset with no pin
+# is EXCLUDED from the public sample and warned about loudly; it is never published with a guessed
+# window, and it still reaches the private archive as normal.
 SAMPLE_DAYS = int(os.environ.get("DF_SAMPLE_DAYS", 7))
-SAMPLE_START = os.environ.get("DF_SAMPLE_START", "2026-08-25")
-SAMPLE_END = os.environ.get("DF_SAMPLE_END", "")
-# Warn once the pinned week is this old. 34 days => the 2026-08-25 pin starts
-# nagging on 2026-09-28, a few days before the planned 2026-10-01 re-pin.
-SAMPLE_REPIN_DAYS = int(os.environ.get("DF_SAMPLE_REPIN_DAYS", 34))
+SAMPLE_STARTS = {
+    "e1_mempool_lifecycle": "2026-08-25",
+    "e1_mempool_minutely": "2026-08-26",
+    "e1_mempool_dropped": "2026-08-26",
+    "e3_mempool_divergence": "2026-08-25",
+    "e8_btc_mempool_lifecycle": "2026-08-25",
+    "e8_btc_block_composition": "2026-08-30",
+    "e9_btc_mempool_divergence": "2026-08-25",
+    "e10_quote_benchmark": "2026-08-25",
+    "e11_ltc_mempool_lifecycle": "2026-08-26",
+    "e12_onramp_quotes": "2026-08-26",
+    "e13_remittance_quotes": "2026-08-26",
+    "e14_l2_preconf": "2026-08-26",
+    "e15_fee_estimators": "2026-08-26",
+    "e16_dex_routes": "2026-08-28",
+    "e17_perp_depth": "2026-08-28",
+    "e18_attestation_pool": "2026-08-28",
+    "e20_stratum_jobs_direct": "2026-08-28",
+    "e21_btc_block_propagation": "2026-08-29",
+    "e21_btc_tx_propagation": "2026-08-29",
+    "e21_btc_relay_floor": "2026-08-29",
+    "e21_btc_p2p_peers": "2026-08-29",
+    "e22_options_surface": "2026-08-29",
+    "e22_options_book": "2026-08-29",
+    "e23_perp_mark_index": "2026-08-29",
+    "e24_solana_quotes": "2026-08-30",
+    "e24_solana_routes": "2026-08-30",
+    "e25_ltc_block_propagation": "2026-08-30",
+    "e25_ltc_tx_propagation": "2026-08-30",
+    "e25_ltc_relay_floor": "2026-08-30",
+    "e25_ltc_p2p_peers": "2026-08-30",
+    "e26_doge_block_propagation": "2026-08-30",
+    "e26_doge_tx_propagation": "2026-08-30",
+    "e26_doge_relay_floor": "2026-08-30",
+    "e26_doge_p2p_peers": "2026-08-30",
+    "e27_bch_block_propagation": "2026-08-30",
+    "e27_bch_tx_propagation": "2026-08-30",
+    "e27_bch_relay_floor": "2026-08-30",
+    "e27_bch_p2p_peers": "2026-08-30",
+    "e28_fee_estimator_accuracy": "2026-08-30",
+    "e29_gas_estimators": "2026-08-31",
+    "e29_eth_block_fees": "2026-08-31",
+    "e30_gas_estimator_accuracy": "2026-08-31",
+}
 
 
-def window_age_warning() -> str | None:
-    """Shout when the published sample has gone stale.
+def dataset_window(ds: str) -> tuple[str, str] | None:
+    """The fixed sample window for one dataset, or None if it has no pin.
 
-    The window is FIXED on purpose, which means nothing breaks when it goes out of date -- it
-    just quietly keeps showing an old week. A frozen window that everyone has forgotten is the
-    failure mode this design invites, so the run says so rather than relying on a diary entry.
+    None is a refusal, not a default. An unpinned dataset is left out of the public sample rather
+    than published with a guessed window, because guessing is how a frozen sample becomes rolling.
     """
-    from datetime import date as _d
-    y, m, d = (int(x) for x in SAMPLE_START.split("-"))
-    age = (_d.today() - _d(y, m, d)).days
-    if age >= SAMPLE_REPIN_DAYS:
-        return (f"SAMPLE WINDOW IS {age} DAYS OLD (pinned {SAMPLE_START}). Re-pin it to a "
-                f"representative recent week: set DF_SAMPLE_START. The public repos MIRROR the "
-                f"window, so the old week is removed automatically.")
-    return None
+    start = SAMPLE_STARTS.get(ds)
+    if not start:
+        return None
+    y, m, d = (int(x) for x in start.split("-"))
+    return start, (date(y, m, d) + timedelta(days=SAMPLE_DAYS - 1)).isoformat()
+
+
+def repo_span(datasets) -> tuple[str, str] | None:
+    """Earliest start and latest end across a product's windowed datasets, for the card."""
+    ws = [w for w in (dataset_window(d) for d in datasets if d in WINDOWED) if w]
+    return (min(w[0] for w in ws), max(w[1] for w in ws)) if ws else None
+
+
+def unpinned_warning() -> str | None:
+    """Warn when a windowed dataset has no pin -- the only thing left that needs a human.
+
+    Replaces the old calendar nag, which fired on a schedule and could always be safely deferred.
+    A warning that is always safe to ignore trains you to ignore warnings. This one fires only
+    when a new collector has been added and its repo would otherwise publish nothing.
+    """
+    missing = sorted(d for d in WINDOWED if d not in SAMPLE_STARTS)
+    if not missing:
+        return None
+    return (f"{len(missing)} windowed dataset(s) have no SAMPLE_STARTS pin and are EXCLUDED from "
+            f"the public sample: {', '.join(missing)}. Add each one's first collection date to "
+            f"SAMPLE_STARTS in hf_push.py. The private archive is unaffected.")
 
 
 def _nag(msg: str) -> None:
@@ -111,13 +185,6 @@ def _nag(msg: str) -> None:
             pass
 
 
-def sample_window() -> tuple[str, str]:
-    """The fixed inclusive [start, end] the public repos publish. Never derived from today."""
-    from datetime import date as _d, timedelta as _t
-    if SAMPLE_END:
-        return SAMPLE_START, SAMPLE_END
-    y, m, d = (int(x) for x in SAMPLE_START.split("-"))
-    return SAMPLE_START, (_d(y, m, d) + _t(days=SAMPLE_DAYS - 1)).isoformat()
 
 MANIFEST = "e0_run_manifest"
 # Held back from the public window. The manifest is deliberately absent: it is the coverage
@@ -1250,7 +1317,7 @@ def _card(name: str, p: dict) -> str:
     tags = "\n".join(f"  - {t}" for t in p["tags"])
     repo = f"{OWNER}/{name}"
     ex = p["example"]
-    _w = sample_window()
+    _w = repo_span(p["datasets"])
     load = (
         "\n```python\n"
         "from huggingface_hub import snapshot_download\n"
@@ -1270,10 +1337,12 @@ def _card(name: str, p: dict) -> str:
             f"size_categories:\n  - {p['size']}\n---\n\n"
             + p["body"]
             + f"\nPartitions are parquet, one file per collection window, under "
-              f"`dataset/YYYY/MM/`. This repo carries a FIXED {SAMPLE_DAYS}-day sample "
-              f"({_w[0]} to {_w[1]}) so you can check schema, coverage and quality before "
-              f"asking for more. It does not advance, so there is nothing to gain by "
-              f"re-downloading it. The full history is held privately, available on request.\n"
+              f"`dataset/YYYY/MM/`. Every dataset here carries a FIXED {SAMPLE_DAYS}-day sample "
+              f"taken from its own first day of collection"
+            + (f", together spanning {_w[0]} to {_w[1]}" if _w else "")
+            + ", so you can check schema, coverage and quality before asking for more. "
+              "It does not advance, so there is nothing to gain by re-downloading it. "
+              "The full history is held privately, available on request.\n"
             + load + _SHARED_TAIL)
 
 
@@ -1290,7 +1359,12 @@ def _stage(target: Path, datasets, window, card: str | None) -> dict:
     for ds in datasets:
         files = _partitions(ds)
         if window is not None and ds in WINDOWED:
-            lo, hi = window
+            w = dataset_window(ds)
+            if w is None:
+                print(f"  !! {ds}: no SAMPLE_STARTS pin, excluded from the public sample",
+                      flush=True)
+                continue
+            lo, hi = w
             # Stems are YYYY-MM-DD or YYYY-MM-DDTHHMMZ; both compare correctly as strings.
             files = [f for f in files if lo <= f.stem[:10] <= hi]
         if not files:
@@ -1354,7 +1428,7 @@ def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
     try:
         api.create_repo(repo_id=repo, repo_type="dataset", private=private, exist_ok=True)
         # A PUBLIC repo MIRRORS its fixed window; the archive ACCUMULATES. Without this the
-        # upload is purely additive, so moving SAMPLE_START would leave the old week in place
+        # upload is purely additive, so re-pinning would leave a dataset's old days in place
         # and the free sample would grow with every re-pin -- which is exactly what freezing the
         # window exists to prevent. Scoped to parquet so the card is never touched, and only for
         # windowed repos (window is None for the archive, which must never be pruned).
@@ -1362,7 +1436,7 @@ def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
         if window is not None:
             n = sum(summary.values())
             # A PARTIAL stage is the dangerous case, not an empty one. If the data checkout were
-            # incomplete, or SAMPLE_START were mistyped to a date matching almost nothing, an
+            # incomplete, or a SAMPLE_STARTS pin were mistyped to a date matching nothing, an
             # additive upload would merely be a no-op -- but a MIRRORING upload would delete
             # published partitions. So compare against what the repo already holds and refuse to
             # shrink it drastically. Deleting collected data is the one irreversible mistake here.
@@ -1411,7 +1485,7 @@ def _receipt(ok: bool, summary: dict) -> None:
 
 def main() -> int:
     everything = sorted({d for p in PRODUCTS.values() for d in p["datasets"]} | ARCHIVE_ONLY)
-    _w = window_age_warning()
+    _w = unpinned_warning()
     if _w:
         print("  !! " + _w, flush=True)
         _nag(_w)
@@ -1419,8 +1493,11 @@ def main() -> int:
     ok = _push(ARCHIVE_REPO, everything, None, None, "archive", private=True)
     _receipt(ok, _last_archive_summary)
 
-    window = sample_window()
-    print(f"  public sample is FROZEN at {window[0]} to {window[1]}", flush=True)
+    # This tuple is now only a flag meaning "public repo"; the real window is resolved per
+    # dataset inside _stage. The archive still passes None and stays purely additive.
+    window = ("per-dataset", "per-dataset")
+    print(f"  public sample: each dataset FROZEN at its own {SAMPLE_DAYS} days from its first "
+          f"collection", flush=True)
     for name, p in PRODUCTS.items():
         _push(f"{OWNER}/{name}", p["datasets"], window, _card(name, p), name, private=False)
     return 0
