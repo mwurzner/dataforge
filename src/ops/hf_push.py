@@ -1338,7 +1338,7 @@ def _card(name: str, p: dict) -> str:
             + p["body"]
             + f"\nPartitions are parquet, one file per collection window, under "
               f"`dataset/YYYY/MM/`. Every dataset here carries a FIXED {SAMPLE_DAYS}-day sample "
-              f"taken from its own first day of collection"
+              f"WINDOW starting at its own first day of collection"
             + (f", together spanning {_w[0]} to {_w[1]}" if _w else "")
             + ", so you can check schema, coverage and quality before asking for more. "
               "It does not advance, so there is nothing to gain by re-downloading it. "
