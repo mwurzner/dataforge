@@ -18,6 +18,16 @@ __pycache__/
 # still starts accumulating from today while we already hold history.
 data/*
 !data/.gitkeep
+# The pre-registration ledger IS the record: its whole value is being timestamped and
+# version-controlled, so it is force-tracked here exactly as Bot/.gitignore does. Same convention,
+# same reason.
+!data/experiments.csv
+
+# Downloaded panel cache for src/research. Deliberately NOT under data/, because on a runner that
+# path is the checked-out private data repo and the workflow runs `git add -A` inside it; a
+# multi-hundred-MB cache landing there would bloat the repo toward the 5 GB ceiling that
+# prune_git.py exists to hold off. Regenerable from HuggingFace, so losing it costs nothing.
+.research_cache/
 
 # Built products. `dist/` holds BOTH the free rolling sample and the FULL PAID SNAPSHOT. This
 # repo is PUBLIC, so committing dist/ would publish the paid product and destroy the only thing
