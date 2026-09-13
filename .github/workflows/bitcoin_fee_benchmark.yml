@@ -39,6 +39,12 @@ jobs:
           repository: ${{ github.repository_owner }}/dataforge-data
           ssh-key: ${{ secrets.DATA_REPO_SSH_KEY }}
           path: data
+          sparse-checkout: |
+            e31_btc_fee_quotes
+            e31_btc_tx_observations
+            e31_btc_tx_events
+            e31_btc_collection_rounds
+            fee_benchmark_state
       - name: Collect quotes and transaction outcomes
         id: collect
         continue-on-error: true
