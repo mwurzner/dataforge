@@ -45,23 +45,40 @@ def _rows(provider, url, extract):
     """extract(payload) -> list of (target_blocks, sat_per_vb, source_field)."""
     t0 = time.time()
     d, err = _get(url)
-    lat = round(time.time() - t0, 3)
+    received = time.time()
+    lat = round(received - t0, 3)
+    provenance = {
+        "request_started_ts": t0, "response_received_ts": received,
+        "source_url": url,
+        "raw_payload_json": json.dumps(d, separators=(",", ":")) if d is not None else None,
+        "source_fee_unit": "sat/kB" if provider in ("bitgo", "blockcypher") else "sat/vB",
+    }
     if err or d is None:
-        return [{"sampled_ts": t0, "provider": provider, "target_blocks": None,
+        return [{**provenance, "sampled_ts": t0, "provider": provider, "target_blocks": None,
                  "sat_per_vb": None, "source_field": None, "latency_s": lat, "error": err}]
     out = []
     try:
         for tb, v, field in extract(d):
             if v is None:
                 continue
-            out.append({"sampled_ts": t0, "provider": provider, "target_blocks": tb,
+            if provider == "blockstream" or (provider == "bitgo" and "feeByBlockTarget" in field):
+                kind, value = "blocks", tb
+            elif provider == "bitcoiner.live":
+                kind, value = "minutes", int(field.split("[")[1].split("]")[0])
+            elif provider == "mempool.space" and field in ("halfHourFee", "hourFee"):
+                kind, value = "minutes", 30 if field == "halfHourFee" else 60
+            else:
+                kind, value = "provider_priority_label", None
+            out.append({**provenance, "sampled_ts": t0, "provider": provider, "target_blocks": tb,
+                        "native_target_kind": kind, "native_target_value": value,
+                        "legacy_target_is_approximation": kind != "blocks",
                         "sat_per_vb": float(v), "source_field": field,
                         "latency_s": lat, "error": None})
     except Exception:
-        return [{"sampled_ts": t0, "provider": provider, "target_blocks": None,
+        return [{**provenance, "sampled_ts": t0, "provider": provider, "target_blocks": None,
                  "sat_per_vb": None, "source_field": None, "latency_s": lat,
                  "error": "unparsable"}]
-    return out or [{"sampled_ts": t0, "provider": provider, "target_blocks": None,
+    return out or [{**provenance, "sampled_ts": t0, "provider": provider, "target_blocks": None,
                     "sat_per_vb": None, "source_field": None, "latency_s": lat,
                     "error": "no estimates in payload"}]
 
