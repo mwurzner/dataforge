@@ -214,7 +214,10 @@ ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
                 "b5_dormancy", "universe",
                 # e19 is DELIBERATELY archive-only, and this is a legal gate rather than an
                 # Behaviour here is deliberate; see the private design notes.
-                "e19_stratum_jobs"}
+                "e19_stratum_jobs",
+                # New observation panel stays private until its outcome semantics are validated.
+                "e31_btc_fee_quotes", "e31_btc_tx_observations", "e31_btc_tx_events",
+                "e31_btc_collection_rounds"}
 
 # TERMS REGISTER, checked 2026-08-29 for every source whose OWN data we publish. Read this
 # before adding a product: the gate is the source's terms, not whether the endpoint answers.
@@ -785,13 +788,14 @@ non-round values are nodes whose own mempool is evicting.
     "bitcoin-fee-estimator-accuracy": {
         "datasets": ["e15_fee_estimators", "e28_fee_estimator_accuracy", MANIFEST],
         "example": "e28_fee_estimator_accuracy",
-        "pretty": "What Bitcoin fee estimators advised, against what blocks required",
+        "pretty": "Bitcoin fee recommendations versus sampled block fee percentiles",
         "tags": ["bitcoin", "fee-estimation", "transaction-fees", "benchmark",
                  "forecasting", "blockchain", "time-series"],
         "size": "100K<n<1M",
         "body": """# Bitcoin fee estimator accuracy
 
-What five fee estimators told you to pay, and what the block actually required.
+What five fee estimators recommended, compared with sampled realized block fee percentiles.
+This is an observational benchmark, not a guarantee that a transaction would have confirmed.
 
 Only one half of this is scarce, and it is worth being precise about which.
 
@@ -811,23 +815,23 @@ the half of the inputs that cannot be obtained after the fact.
 | name | one row is |
 |---|---|
 | `e15_fee_estimators` | one provider's recommendation at one moment, for one confirmation target |
-| `e28_fee_estimator_accuracy` | one block against one provider's forecast for it: predicted, cleared, and whether it would have worked |
+| `e28_fee_estimator_accuracy` | one provider's recommendation compared with a sampled block fee percentile |
 
 ## Reading it
 
-`sufficient` answers the only question a wallet actually asks: would paying the recommendation
-have got the transaction into that block. `overpay_ratio` is the recommendation divided by what
-cleared, so 1.0 is exact and 3.0 means paying triple.
+`sufficient` is a legacy column name: it means only that the recommendation was at least
+`cleared_p10`. It does not prove confirmation. `overpay_ratio` divides the recommendation by
+that percentile; it is not a measured saving or a counterfactual transaction cost.
 
-The two together are the whole point, because either alone is misleading. A provider can be
-sufficient every single time by quoting an absurd number, and cheap every time by quoting one
-that rarely works. One early window showed both failure modes at once: two providers were
-sufficient on 100% of blocks while quoting about 3x the going rate, and another quoted 1.1x and
-was sufficient on 83%. At a six-block target that same cheap provider fell to 41%.
+`target_blocks` includes approximate conversions of minute targets and provider priority labels.
+The legacy join uses target_blocks times 600 seconds, not the next actual N blocks.
+New E15 rows preserve response-availability timestamps, raw payloads, native targets and units.
+New E28 rows carry `metric_kind=sampled_fee_percentile_proxy` and `proves_confirmation=false`;
+older partitions predate those columns but have the same limitations.
 
-`target_blocks` is the provider's own horizon, and a forecast is matched to the block it was
-about -- roughly `target_blocks` block-times after it was made -- never to a block that had
-already been found when the forecast was issued.
+A separate private E31 panel records sampled real transactions, pending follow-up across runs,
+package changes, canonical confirmation checks and observation gaps. It does not infer that
+senders followed a provider's recommendation or broadcast experimental transactions.
 
 ## What counts as the rate that cleared
 
@@ -852,7 +856,7 @@ to a pool, and those measure a private arrangement rather than a market.
 - Fee coverage in the underlying panel is partial and varies with load, so the percentile is
   computed over transactions whose fee we sampled, not over the whole block. It is never imputed.
 - A quiet mempool flatters every provider: when almost anything confirms, being sufficient is
-  easy and overpayment is large. Read the two columns together, and read them by regime rather
+  easy and percentile ratios are large. Read the two columns together, and read them by regime rather
   than pooled across months.
 - `lead_seconds` records how far ahead of the block each forecast was actually made. Matching is
   to the newest forecast at or before the target moment, so this varies with sampling cadence.

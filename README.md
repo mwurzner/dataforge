@@ -1,5 +1,8 @@
 # DataForge
 
+Bitcoin fee recommendations and sampled real transaction outcomes are collected by the
+**Bitcoin fee benchmark** workflow. See [measurement design and operating instructions](docs/bitcoin_fee_benchmark.md).
+
 Daily snapshots of on-chain **contract state** for DeFi lending markets and ERC-4626 vaults.
 
 ## Why this exists

@@ -1,0 +1,60 @@
+name: Bitcoin fee benchmark
+
+on:
+  schedule:
+    - cron: '23 0,5,10,15,20 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_s:
+        description: 'Observation duration in seconds; 180 for a smoke run, 16200 for normal collection'
+        required: false
+        default: '16200'
+
+permissions:
+  contents: read
+
+# Exactly one writer owns the cross-run transaction checkpoint.
+concurrency:
+  group: dataforge-bitcoin-fee-benchmark
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Test measurement and restart semantics
+        run: python -m unittest discover -s tests -v
+      - name: Check out private data and persistent follow-up state
+        id: data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/dataforge-data
+          ssh-key: ${{ secrets.DATA_REPO_SSH_KEY }}
+          path: data
+      - name: Collect quotes and transaction outcomes
+        id: collect
+        continue-on-error: true
+        env:
+          DURATION: ${{ inputs.duration_s || '16200' }}
+        run: python -m src.ops.btc_fee_benchmark --duration "$DURATION"
+      - name: Persist observations and cross-run checkpoint
+        if: always() && steps.data.outcome == 'success'
+        env:
+          DF_RUN_ID: ${{ github.run_id }}
+        run: python -m src.ops.push_data
+      - name: Archive new panels privately on Hugging Face
+        if: always() && steps.data.outcome == 'success'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python -m src.ops.btc_fee_benchmark --archive
+      - name: Check collection result
+        if: steps.collect.outcome == 'failure'
+        run: exit 1

@@ -1,7 +1,9 @@
-"""Fee-estimator accuracy: what was predicted against what actually cleared.
+"""Legacy fee-percentile benchmark; not evidence of transaction confirmation.
 
-One row per (block, provider, target): the fee rate a provider recommended, the fee rate the
-block actually required, and whether paying the recommendation would have got you in.
+One row per (block, provider, target): a recommendation versus a sampled realized percentile.
+`sufficient` is retained for compatibility and means only `predicted >= sampled p10`.
+It does not prove inclusion, and the 600-second target matching is approximate.
+E31 records observed transaction outcomes separately, without counterfactual success claims.
 
 WHY THIS IS NOT RECONSTRUCTABLE, checked rather than assumed (2026-08-30).
 
@@ -118,6 +120,8 @@ def build(fee_df: pd.DataFrame, mempool_df: pd.DataFrame) -> pd.DataFrame:
                     # Would paying the recommendation have got you in? Null rather than a guess
                     # where the block priced nothing to compare against.
                     "sufficient": (pred >= cleared) if cleared == cleared else None,
+                    "metric_kind": "sampled_fee_percentile_proxy",
+                    "proves_confirmation": False,
                     # How many times the going rate the recommendation was. Above 1 is overpaying.
                     "overpay_ratio": (round(pred / cleared, 4) if cleared and cleared > 0 else None),
                 })
