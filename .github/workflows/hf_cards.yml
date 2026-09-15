@@ -1,0 +1,46 @@
+name: Update Hugging Face dataset cards
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Ephemeral collector', 'Daily state snapshot']
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hf-card-edits
+  cancel-in-progress: false
+
+jobs:
+  cards:
+    # Refresh cards after a run using older source, without interrupting collection.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_sha != github.sha)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install card-publishing dependencies
+        run: pip install huggingface_hub PyYAML
+      - name: Check card publication safeguards
+        run: python -m unittest tests.test_hf_cards -v
+      - name: Back up and update README files
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: dataforge-labs
+        run: python -m src.ops.hf_cards --publish --output card-review
+      - name: Save card backups and file verification receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-card-review-${{ github.run_id }}
+          path: card-review/
+          retention-days: 90
