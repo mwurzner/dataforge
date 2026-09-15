@@ -43,7 +43,7 @@ class CardTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 rewrite_card(card, 'bitcoin-mempool-lifecycle')
 
-    def test_new_names_select_original_files_and_have_one_default(self):
+    def test_new_names_select_descriptive_directories_and_have_one_default(self):
         all_tables = {table for product in PRODUCTS.values() for table in product['datasets']}
         self.assertEqual(set(PUBLIC_NAMES), all_tables)
         self.assertEqual(len(set(PUBLIC_NAMES.values())), len(PUBLIC_NAMES))
@@ -51,7 +51,7 @@ class CardTests(unittest.TestCase):
             configs = public_configs(product)
             self.assertEqual(sum(config.get('default', False) for config in configs), 1)
             for table, config in zip(product['datasets'], configs):
-                self.assertEqual(config['data_files'], [{'split': 'train', 'path': f'{table}/**/*.parquet'}])
+                self.assertEqual(config['data_files'], [{'split': 'train', 'path': f'{PUBLIC_NAMES[table]}/**/*.parquet'}])
                 self.assertNotRegex(config['config_name'], r'^e\d+_')
 
     def test_existing_custom_configs_are_not_overwritten(self):
@@ -67,7 +67,7 @@ class CardTests(unittest.TestCase):
 
     def test_config_validation_refuses_missing_or_uncovered_partitions(self):
         name = 'crypto-options-surface'
-        files = [SimpleNamespace(rfilename=f'{table}/2026/09/sample.parquet') for table in PRODUCTS[name]['datasets']]
+        files = [SimpleNamespace(rfilename=f'{PUBLIC_NAMES[table]}/2026/09/sample.parquet') for table in PRODUCTS[name]['datasets']]
         valid = SimpleNamespace(siblings=files)
         validate_config_files(valid, name)
         with self.assertRaises(ValueError):

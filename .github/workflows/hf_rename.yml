@@ -1,0 +1,76 @@
+name: Rename Hugging Face public folders
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: hf-public-layout
+  cancel-in-progress: false
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install huggingface_hub PyYAML datasets pandas
+      - name: Test data preservation safeguards
+        run: python -m unittest tests.test_hf_cards tests.test_hf_rename -v
+      - name: Wait for collectors using the previous publishing code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, time
+          for attempt in range(660):
+              result = subprocess.check_output(['gh', 'api', '--paginate', '--slurp',
+                  f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs?per_page=100'])
+              runs = [run for page in json.loads(result) for run in page['workflow_runs']]
+              older = [r for r in runs if r['status'] != 'completed'
+                  and r['name'] in ('Ephemeral collector', 'Daily state snapshot')
+                  and r['head_sha'] != os.environ['GITHUB_SHA']]
+              if not older:
+                  break
+              print('Waiting for existing publishers:', [(r['id'], r['name']) for r in older], flush=True)
+              time.sleep(30)
+          else:
+              raise SystemExit('Existing publishers have not finished; no files were changed')
+          PY
+      - name: Back up, copy, verify and rename public folders
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: dataforge-labs
+        run: python -m src.ops.hf_rename --publish --output folder-review
+      - name: Save inventories, card backups and verification receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hf-folder-review-${{ github.run_id }}
+          path: folder-review/
+          retention-days: 90
+      - name: Check examples load from the renamed folders
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from datasets import load_dataset
+          examples = {
+              'dogecoin-network-propagation': ['dogecoin_block_announcements'],
+              'crypto-options-surface': ['options_surface', 'options_order_book'],
+              'bitcoin-fee-estimator-accuracy': ['bitcoin_fee_recommendations', 'bitcoin_fee_percentile_comparisons'],
+          }
+          for name, configs in examples.items():
+              receipt = json.loads((Path('folder-review') / name / 'receipt.json').read_text())
+              for config in configs:
+                  data = load_dataset(receipt['repo'], config, split='train', streaming=True, revision=receipt['commit'])
+                  assert next(iter(data)), (name, config)
+                  print('Loaded', name, config, flush=True)
+          PY

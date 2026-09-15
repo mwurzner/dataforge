@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: hf-card-edits
+  group: hf-public-layout
   cancel-in-progress: false
 
 jobs:

@@ -30,10 +30,10 @@ def rewrite_card(existing: bytes, name: str) -> bytes:
     if count != 1:
         raise ValueError(f'{name}: expected one display title')
     configs = public_configs(PRODUCTS[name])
-    if 'configs' in before and before['configs'] != configs:
+    if 'configs' in before and before['configs'] not in (configs, public_configs(PRODUCTS[name], legacy_paths=True)):
         raise ValueError(f'{name}: existing configurations differ; refusing to replace them')
-    if 'configs' not in before:
-        front += '\n' + yaml.safe_dump({'configs': configs}, sort_keys=False).rstrip()
+    updated = dict(before, pretty_name=PRODUCTS[name]['pretty'], configs=configs)
+    front = yaml.safe_dump(updated, sort_keys=False).rstrip()
     after = yaml.safe_load(front)
     allowed = {'pretty_name', 'configs'}
     if {k: v for k, v in before.items() if k not in allowed} != {k: v for k, v in after.items() if k not in allowed}:
@@ -66,7 +66,7 @@ def validate_config_files(info, name: str):
     paths = {entry.rfilename for entry in info.siblings}
     selected = set()
     for storage_name, config in zip(PRODUCTS[name]['datasets'], public_configs(PRODUCTS[name])):
-        expected = {path for path in paths if path.startswith(storage_name + '/') and path.endswith('.parquet')}
+        expected = {path for path in paths if path.startswith(PUBLIC_NAMES[storage_name] + '/') and path.endswith('.parquet')}
         pattern = config['data_files'][0]['path']
         matches = {path for path in paths if fnmatchcase(path, pattern)}
         if not matches or matches != expected or selected.intersection(matches):

@@ -1,6 +1,6 @@
 # Dataset table names
 
-The public Hugging Face repositories expose descriptive table names through dataset configurations. For example, the options repository offers `options_surface`, `options_order_book` and `collection_runs`.
+The public Hugging Face repositories expose descriptive table names in both dataset configurations and file directories. For example, the options repository offers `options_surface`, `options_order_book` and `collection_runs`.
 
 ```python
 from datasets import load_dataset
@@ -16,11 +16,15 @@ Install `datasets` to load the tables. The `train` split is the complete selecte
 
 ## Compatibility and storage
 
-These are public table names, not filesystem migrations. Each name selects all existing Parquet partitions in its original directory. The collector IDs, raw columns, sample windows, archive paths and private checkpoints are unchanged. Existing direct file URLs and scripts using directory paths remain valid. No data is moved, copied or deleted to introduce a name.
+The public directories now match their table names. Files retain their original contents and date partitions. Collector IDs, raw columns, sample windows, private archive paths and private checkpoints are unchanged.
+
+Update scripts that contain an earlier public directory path using the mapping below. To access the original layout, pin downloads to revision `before-folder-rename-20260915`; old paths on `main` have moved. The named `load_dataset` configurations remain the same.
+
+The migration creates a restore tag, copies each file to its new path, compares every Git/LFS identity and size, and then removes only verified original paths while updating the card in the same commit. Commits require the expected parent revision. Inventories, cards and verification receipts are saved as workflow artifacts.
 
 The cards include a collapsed file-path reference. This guide lists every public table. Private-only collection tables retain their internal IDs and are not made public by this change.
 
-| Public table name | Existing storage directory |
+| Current table and directory | Earlier public directory |
 |---|---|
 | `bitcoin_block_announcements` | `e21_btc_block_propagation/` |
 | `bitcoin_block_composition` | `e8_btc_block_composition/` |
@@ -68,6 +72,6 @@ The cards include a collapsed file-path reference. This guide lists every public
 
 ## Maintaining the names
 
-`src/ops/dataset_names.py` is the mapping used by the card generator and README-only publisher. Adding a public table requires an explicit name. The publisher verifies that the configured paths cover every existing Parquet file exactly once before committing a card, and compares all non-README file identities after publication.
+`src/ops/dataset_names.py` is the mapping used by the card generator, public uploader and folder migration. Private uploads retain internal paths. Routine uploads are additive; any future sample re-pin requiring removal needs a separate reviewed migration. Adding a public table requires an explicit name. The publisher verifies that the configured paths cover every existing Parquet file exactly once before committing a card, and compares all non-README file identities after publication.
 
 Hugging Face documents this mechanism in its [manual dataset configuration guide](https://huggingface.co/docs/hub/datasets-manual-configuration).

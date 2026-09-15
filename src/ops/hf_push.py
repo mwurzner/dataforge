@@ -242,8 +242,9 @@ ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
 
 # Rows withheld because the source's terms forbid automated COLLECTION, not merely resale, so
 # there is no archive-only compromise of the kind e19 gets. Applied at stage time and to
-# HISTORICAL partitions, which is what makes it retroactive: a public repo mirrors its window,
-# so rows already published disappear on the next push with no manual repo surgery.
+# HISTORICAL partitions, which makes row filtering retroactive for uploaded partitions,
+# so matching rows are replaced on the next upload. Fully excluded partitions need
+# a separately reviewed removal; routine publication never deletes remote files.
 #
 # Deliberately applied to the private archive as well. Keeping a private copy of data we should
 # not have gathered buys nothing and states the wrong intent. The git data repo still holds the
@@ -451,7 +452,7 @@ def _card(name: str, p: dict) -> str:
             f"size_categories:\n  - {p['size']}\n" + configs + "---\n\n"
             + p["body"]
             + f"\n## Files and access\n\n"
-              f"Data is stored as Parquet files under `dataset/YYYY/MM/`, with partitions "
+              f"Data is stored as Parquet files under `table_name/YYYY/MM/`, with partitions "
               f"for collection windows. Each measurement table has a fixed {SAMPLE_DAYS}-day "
               f"sample beginning at its configured collection start date"
             + (f". The sample windows in this repository span {_w[0]} to {_w[1]}" if _w else "")
@@ -475,6 +476,7 @@ def _stage(target: Path, datasets, window, card: str | None) -> dict:
     target.mkdir(parents=True, exist_ok=True)
     summary = {}
     for ds in datasets:
+        output_dir = target / (PUBLIC_NAMES[ds] if window is not None else ds)
         files = _partitions(ds)
         if window is not None and ds in WINDOWED:
             w = dataset_window(ds)
@@ -489,7 +491,7 @@ def _stage(target: Path, datasets, window, card: str | None) -> dict:
             continue
         red = REDACTIONS.get(ds)
         for f in files:
-            dst = target / f.relative_to(DATA)
+            dst = output_dir / f.relative_to(DATA / ds)
             dst.parent.mkdir(parents=True, exist_ok=True)
             if red is None:
                 shutil.copy(f, dst)
@@ -497,8 +499,8 @@ def _stage(target: Path, datasets, window, card: str | None) -> dict:
             # A source whose terms forbid collection must not be published from HISTORICAL
             # partitions either, and rewriting the archive is the wrong lever: it destroys a
             # record we may need. Filtering at stage time is declarative, reversible, and --
-            # because a public repo mirrors its window -- removes the rows already up there on
-            # the very next push, with no manual repo surgery.
+            # the upload replaces each corresponding partition. Entirely excluded
+            # partitions require a separately reviewed removal from published history.
             import pandas as pd
             col, drop = red
             df = pd.read_parquet(f)
@@ -508,7 +510,7 @@ def _stage(target: Path, datasets, window, card: str | None) -> dict:
                 dst.unlink(missing_ok=True)
                 continue
             df.to_parquet(dst, index=False)
-        files = [f for f in files if (target / f.relative_to(DATA)).exists()]
+        files = [f for f in files if (output_dir / f.relative_to(DATA / ds)).exists()]
         if not files:
             continue
         summary[ds] = len(files)
@@ -545,42 +547,11 @@ def _push(repo: str, datasets, window, card, label, private: bool) -> bool:
     api = HfApi(token=token)
     try:
         api.create_repo(repo_id=repo, repo_type="dataset", private=private, exist_ok=True)
-        # A PUBLIC repo MIRRORS its fixed window; the archive ACCUMULATES. Without this the
-        # upload is purely additive, so re-pinning would leave a dataset's old days in place
-        # and the free sample would grow with every re-pin -- which is exactly what freezing the
-        # window exists to prevent. Scoped to parquet so the card is never touched, and only for
-        # windowed repos (window is None for the archive, which must never be pruned).
-        extra = {}
-        if window is not None:
-            n = sum(summary.values())
-            # A PARTIAL stage is the dangerous case, not an empty one. If the data checkout were
-            # incomplete, or a SAMPLE_STARTS pin were mistyped to a date matching nothing, an
-            # additive upload would merely be a no-op -- but a MIRRORING upload would delete
-            # published partitions. So compare against what the repo already holds and refuse to
-            # shrink it drastically. Deleting collected data is the one irreversible mistake here.
-            try:
-                published = sum(1 for f in api.list_repo_files(repo_id=repo, repo_type="dataset")
-                                if f.endswith(".parquet"))
-            except Exception:
-                published = 0
-            if n < 1:
-                raise RuntimeError("refusing to prune a public repo from an empty stage")
-            if published and n < published * 0.5:
-                print(f"  !! {label}: stage has {n} partitions against {published} published. "
-                      f"REFUSING to mirror -- uploading additively instead. If this is a "
-                      f"deliberate re-pin to a smaller window, set DF_ALLOW_SHRINK=1.",
-                      flush=True)
-                if os.environ.get("DF_ALLOW_SHRINK") != "1":
-                    extra = {}
-                else:
-                    extra["delete_patterns"] = ["**/*.parquet"]
-            else:
-                extra["delete_patterns"] = ["**/*.parquet"]
-            if extra:
-                print(f"  {label}: mirroring {n} partitions for {window[0]}..{window[1]} "
-                      f"(stale parquet pruned; repo held {published})", flush=True)
+        # Publish additively: a partial checkout must never remove published data.
+        # Renames use hf_rename's verified copies and exact paths. Future sample re-pins
+        # need a separate reviewed migration; routine uploads do not prune old samples.
         api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(stage),
-                          commit_message=f"{label}: {date.today().isoformat()}", **extra)
+                          commit_message=f"{label}: {date.today().isoformat()}")
     except Exception as exc:
         # Never fail the run on a publish problem: git already holds the window.
         print(f"  !! HF upload failed for {label}: {type(exc).__name__}: {str(exc)[:120]}",

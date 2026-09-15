@@ -60,8 +60,11 @@ def _tree(repo: str, path: str = "", token: str | None = None):
 
 
 def _parts(repo: str, dataset: str, token: str | None) -> list[str]:
+    from src.ops.dataset_names import PUBLIC_NAMES
+
+    directory = dataset if repo == ARCHIVE else PUBLIC_NAMES.get(dataset, dataset)
     out = []
-    for y in _tree(repo, dataset, token):
+    for y in _tree(repo, directory, token):
         if y.get("type") != "directory":
             continue
         for m in _tree(repo, y["path"], token):
