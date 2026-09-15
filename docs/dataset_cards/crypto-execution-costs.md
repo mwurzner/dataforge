@@ -6,9 +6,9 @@ Ethereum swap quotes, route details and selected perpetual-futures order-book sn
 
 | Table | Record |
 |---|---|
-| `e10_quote_benchmark` | A swap quote at a specified size, with available provider-fee details |
-| `e16_dex_routes` | A route leg, with venue, pool and amount where supplied |
-| `e17_perp_depth` | An order-book snapshot summarising spread and resting notional within bands around the midpoint |
+| `ethereum_swap_quotes` | A swap quote at a specified size, with available provider-fee details |
+| `ethereum_swap_routes` | A route leg, with venue, pool and amount where supplied |
+| `perpetual_order_book_depth` | An order-book snapshot summarising spread and resting notional within bands around the midpoint |
 
 ## Using the data
 

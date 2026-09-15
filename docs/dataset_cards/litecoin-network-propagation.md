@@ -6,10 +6,10 @@ Timestamped block and transaction announcements received from connected Litecoin
 
 | Table | Record |
 |---|---|
-| `e25_ltc_block_propagation` | A peer's announcement of a block, timestamped on receipt |
-| `e25_ltc_tx_propagation` | A retained transaction announcement from a peer, timestamped on receipt |
-| `e25_ltc_relay_floor` | A peer's advertised minimum relay fee at the time it was received |
-| `e25_ltc_p2p_peers` | Peer address, user agent, services and connection or handshake state |
+| `litecoin_block_announcements` | A peer's announcement of a block, timestamped on receipt |
+| `litecoin_transaction_announcements` | A retained transaction announcement from a peer, timestamped on receipt |
+| `litecoin_peer_relay_fees` | A peer's advertised minimum relay fee at the time it was received |
+| `litecoin_peer_connections` | Peer address, user agent, services and connection or handshake state |
 
 ## Timing and sampling
 

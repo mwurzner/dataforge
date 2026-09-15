@@ -6,7 +6,7 @@ Repeated observations from Wise's public remittance comparison service, covering
 
 | Table | Record |
 |---|---|
-| `e13_remittance_quotes` | A provider's displayed comparison for a corridor and send amount, with rate, fees and recipient amount |
+| `remittance_quotes` | A provider's displayed comparison for a corridor and send amount, with rate, fees and recipient amount |
 
 ## Using the data
 

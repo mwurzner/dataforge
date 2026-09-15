@@ -6,8 +6,8 @@ Jupiter swap quotes at fixed SOL input sizes, with the route legs returned for e
 
 | Table | Record |
 |---|---|
-| `e24_solana_quotes` | A pair and input amount, with quoted output, price impact, value and route-leg count |
-| `e24_solana_routes` | A leg of the chosen route, including venue, amounts and allocation |
+| `solana_swap_quotes` | A pair and input amount, with quoted output, price impact, value and route-leg count |
+| `solana_swap_routes` | A leg of the chosen route, including venue, amounts and allocation |
 
 ## Using the data
 

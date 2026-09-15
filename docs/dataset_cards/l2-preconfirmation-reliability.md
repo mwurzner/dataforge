@@ -6,7 +6,7 @@ Periodic observations of unsafe and safe heads on selected OP Stack networks, wi
 
 | Table | Record |
 |---|---|
-| `e14_l2_preconf` | A heartbeat with head and check statistics, or a detected violation |
+| `l2_preconfirmation_checks` | A heartbeat with head and check statistics, or a detected violation |
 
 ## Using the data
 

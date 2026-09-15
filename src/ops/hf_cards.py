@@ -10,10 +10,11 @@ from pathlib import Path
 import re
 
 from src.ops.hf_push import OWNER, PRODUCTS, _card
+from src.ops.dataset_names import PUBLIC_NAMES, public_configs
 
 
 def rewrite_card(existing: bytes, name: str) -> bytes:
-    """Preserve existing metadata, changing only the display title and Markdown body."""
+    """Update display names and table configurations while retaining unrelated metadata."""
     import yaml
 
     original = existing.decode('utf-8')
@@ -28,13 +29,19 @@ def rewrite_card(existing: bytes, name: str) -> bytes:
     front, count = re.subn(r'^pretty_name:.*$', lambda _: f'pretty_name: {title}', front, flags=re.M)
     if count != 1:
         raise ValueError(f'{name}: expected one display title')
+    configs = public_configs(PRODUCTS[name])
+    if 'configs' in before and before['configs'] != configs:
+        raise ValueError(f'{name}: existing configurations differ; refusing to replace them')
+    if 'configs' not in before:
+        front += '\n' + yaml.safe_dump({'configs': configs}, sort_keys=False).rstrip()
     after = yaml.safe_load(front)
-    if {k: v for k, v in before.items() if k != 'pretty_name'} != {k: v for k, v in after.items() if k != 'pretty_name'}:
-        raise ValueError(f'{name}: metadata changed beyond the display title')
+    allowed = {'pretty_name', 'configs'}
+    if {k: v for k, v in before.items() if k not in allowed} != {k: v for k, v in after.items() if k not in allowed}:
+        raise ValueError(f'{name}: unrelated metadata changed')
     generated = _card(name, PRODUCTS[name])
     body = generated.split('\n---\n', 1)[1].lstrip('\n')
     for table in PRODUCTS[name]['datasets']:
-        if f'`{table}`' not in body:
+        if f'`{PUBLIC_NAMES[table]}`' not in body:
             raise ValueError(f'{name}: missing table description: {table}')
     return ('---\n' + front + '\n---\n\n' + body).encode('utf-8')
 
@@ -52,6 +59,23 @@ def file_identities(info) -> dict:
     return result
 
 
+def validate_config_files(info, name: str):
+    """Each public configuration must select exactly its existing table's Parquet files."""
+    from fnmatch import fnmatchcase
+
+    paths = {entry.rfilename for entry in info.siblings}
+    selected = set()
+    for storage_name, config in zip(PRODUCTS[name]['datasets'], public_configs(PRODUCTS[name])):
+        expected = {path for path in paths if path.startswith(storage_name + '/') and path.endswith('.parquet')}
+        pattern = config['data_files'][0]['path']
+        matches = {path for path in paths if fnmatchcase(path, pattern)}
+        if not matches or matches != expected or selected.intersection(matches):
+            raise ValueError(f'{name}: invalid file selection for {config["config_name"]}')
+        selected.update(matches)
+    if selected != {path for path in paths if path.endswith('.parquet')}:
+        raise ValueError(f'{name}: some Parquet files are not covered by the named tables')
+
+
 def publish_one(api, repo: str, before, card: bytes, report: Path):
     """The only write operation in this module is an addition/replacement of README.md."""
     from huggingface_hub import CommitOperationAdd
@@ -67,7 +91,7 @@ def publish_one(api, repo: str, before, card: bytes, report: Path):
         repo_type='dataset',
         operations=[operation],
         parent_commit=before.sha,
-        commit_message='Clarify dataset description, methods and limitations',
+        commit_message='Use descriptive dataset table names and update loading examples',
     )
     # Pin verification to our commit so concurrent collection cannot affect the comparison.
     after = api.dataset_info(repo, revision=commit.oid, files_metadata=True)
@@ -100,6 +124,7 @@ def main():
         if info.private:
             raise ValueError(f'{repo}: private repository is outside this update')
         identities = file_identities(info)
+        validate_config_files(info, name)
         path = hf_hub_download(repo, 'README.md', repo_type='dataset', revision=info.sha, token=api.token)
         before = Path(path).read_bytes()
         card = rewrite_card(before, name)

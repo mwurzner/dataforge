@@ -1,5 +1,17 @@
 # DataForge
 
+## Loading the public datasets
+
+The [DataForge Hugging Face datasets](https://huggingface.co/dataforge-labs) use descriptive table names such as `options_surface`, `bitcoin_fee_recommendations` and `remittance_quotes`.
+
+```python
+from datasets import load_dataset
+
+data = load_dataset("dataforge-labs/crypto-options-surface", "options_surface", split="train")
+```
+
+See the [table naming guide](docs/dataset_names.md) for the full name mapping and compatibility details. The names point to the original files; existing storage paths and data collection are unchanged.
+
 Bitcoin fee recommendations and sampled real transaction outcomes are collected by the
 **Bitcoin fee benchmark** workflow. See [measurement design and operating instructions](docs/bitcoin_fee_benchmark.md).
 

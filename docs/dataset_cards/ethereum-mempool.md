@@ -6,10 +6,10 @@ Ethereum pending-transaction activity, lifecycle observations and comparisons be
 
 | Table | Record |
 |---|---|
-| `e1_mempool_minutely` | A minute of pending-transaction activity |
-| `e1_mempool_dropped` | A transaction classified as dropped during observation |
-| `e1_mempool_lifecycle` | A transaction lifecycle record; this series ends on 2026-08-26 |
-| `e3_mempool_divergence` | A comparison of pending sets from several providers |
+| `ethereum_mempool_minute_summary` | A minute of pending-transaction activity |
+| `ethereum_dropped_transactions` | A transaction classified as dropped during observation |
+| `ethereum_transaction_lifecycle` | A transaction lifecycle record; this series ends on 2026-08-26 |
+| `ethereum_mempool_comparison` | A comparison of pending sets from several providers |
 
 ## Using the data
 

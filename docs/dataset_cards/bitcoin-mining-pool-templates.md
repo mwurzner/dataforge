@@ -6,7 +6,7 @@ Timestamped Stratum job messages collected directly from Bitcoin mining pool end
 
 | Table | Record |
 |---|---|
-| `e20_stratum_jobs_direct` | A job received from a pool endpoint, with its observation time, nTime, coinbase, merkle branch count and clean-jobs flag |
+| `bitcoin_mining_pool_jobs` | A job received from a pool endpoint, with its observation time, nTime, coinbase, merkle branch count and clean-jobs flag |
 
 ## Using the data
 

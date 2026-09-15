@@ -44,6 +44,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.ops.dataset_names import PUBLIC_NAMES, public_configs, storage_reference
+
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 OWNER = os.environ.get("HF_OWNER", "dataforge-labs")
@@ -254,7 +256,7 @@ REDACTIONS = {"e17_perp_depth": ("venue", {"paradex"})}
 _SHARED_TAIL = '''
 ## Coverage
 
-`e0_run_manifest` records collection windows, poll counts and failures. It is published in full and may cover dates beyond the fixed data sample. Collection gaps are not interpolated. Use the manifest together with table timestamps and error fields to assess coverage.
+`collection_runs` records collection windows, poll counts and failures. It is published in full and may cover dates beyond the fixed data sample. Collection gaps are not interpolated. Use this table together with measurement timestamps and error fields to assess coverage.
 
 ## License and contact
 
@@ -425,18 +427,19 @@ PRODUCTS = {
 
 
 def _card(name: str, p: dict) -> str:
+    import yaml
+
     tags = "\n".join(f"  - {t}" for t in p["tags"])
     repo = f"{OWNER}/{name}"
-    ex = p["example"]
+    ex = PUBLIC_NAMES[p["example"]]
+    configs = yaml.safe_dump({'configs': public_configs(p)}, sort_keys=False)
     _w = repo_span(p["datasets"])
     load = (
         "\n```python\n"
-        "from huggingface_hub import snapshot_download\n"
-        "import pandas as pd, glob\n\n"
-        f'path = snapshot_download("{repo}", repo_type="dataset",\n'
-        f'                         allow_patterns="{ex}/**")\n'
-        "df = pd.concat(map(pd.read_parquet,\n"
-        f'                   glob.glob(f"{{path}}/{ex}/**/*.parquet", recursive=True)))\n'
+        "from datasets import load_dataset\n\n"
+        f'data = load_dataset("{repo}",\n'
+        f'                    "{ex}", split="train")\n'
+        "df = data.to_pandas()\n"
         "```\n"
     )
     # QUOTED. A colon inside pretty_name ("Crypto execution costs: DEX quotes...")
@@ -445,7 +448,7 @@ def _card(name: str, p: dict) -> str:
     # Caught by validating the YAML instead of eyeballing it.
     return (f"---\nlicense: odc-by\npretty_name: \"{p['pretty']}\"\ntags:\n{tags}\n"
             f"task_categories:\n  - time-series-forecasting\n"
-            f"size_categories:\n  - {p['size']}\n---\n\n"
+            f"size_categories:\n  - {p['size']}\n" + configs + "---\n\n"
             + p["body"]
             + f"\n## Files and access\n\n"
               f"Data is stored as Parquet files under `dataset/YYYY/MM/`, with partitions "
@@ -456,7 +459,9 @@ def _card(name: str, p: dict) -> str:
               "The public sample dates remain fixed as additional history accumulates privately. "
               "Contact DataForge through the discussions tab to enquire about additional history.\n"
               "\n### Load a table\n"
-            + load + _SHARED_TAIL)
+            + "\nInstall `datasets` and `pandas` to run this example. The `train` split contains "
+              "all observations in the selected table; it is not a predefined modelling split.\n"
+            + load + _SHARED_TAIL + storage_reference(p))
 
 
 def _partitions(dataset: str) -> list[Path]:
