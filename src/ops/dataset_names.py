@@ -1,4 +1,4 @@
-"""Public Hugging Face table names mapped to immutable collection directories."""
+"""Descriptive public table and directory names mapped to internal collector IDs."""
 
 PUBLIC_NAMES = {
     'e0_run_manifest': 'collection_runs',
@@ -47,12 +47,15 @@ PUBLIC_NAMES = {
 }
 
 
-def public_configs(product: dict) -> list[dict]:
+RESTORE_TAG = 'before-folder-rename-20260915'
+
+
+def public_configs(product: dict, *, legacy_paths: bool = False) -> list[dict]:
     configs = []
     for storage_name in product['datasets']:
         config = {
             'config_name': PUBLIC_NAMES[storage_name],
-            'data_files': [{'split': 'train', 'path': f'{storage_name}/**/*.parquet'}],
+            'data_files': [{'split': 'train', 'path': f'{storage_name if legacy_paths else PUBLIC_NAMES[storage_name]}/**/*.parquet'}],
         }
         if storage_name == product['example']:
             config['default'] = True
@@ -65,12 +68,14 @@ def public_configs(product: dict) -> list[dict]:
 
 
 def storage_reference(product: dict) -> str:
-    """Keep legacy download paths available without making them the primary table names."""
+    """Document old paths and the pre-migration revision for existing consumers."""
     rows = '\n'.join(f'| `{PUBLIC_NAMES[name]}` | `{name}/` |' for name in product['datasets'])
     return (
-        '\n<details>\n<summary>File paths and compatibility</summary>\n\n'
-        'The table names above are Hugging Face dataset configurations. Each configuration '
-        'reads the original Parquet files, whose paths remain unchanged for existing downloads '
-        'and scripts. No records are copied, moved or renamed.\n\n'
-        '| Table name | Storage directory |\n|---|---|\n' + rows + '\n\n</details>\n'
+        '\n<details>\n<summary>Earlier file paths</summary>\n\n'
+        'Each table is stored under a directory with the same descriptive name. The file '
+        'contents and date partitions are unchanged. Scripts using an earlier directory name '
+        'should use the corresponding table name below, or pin downloads to revision '
+        f'`{RESTORE_TAG}` to access the original layout. Internal collector IDs are retained '
+        'in the private archive and may appear in raw coverage records.\n\n'
+        '| Current table and directory | Earlier directory |\n|---|---|\n' + rows + '\n\n</details>\n'
     )
