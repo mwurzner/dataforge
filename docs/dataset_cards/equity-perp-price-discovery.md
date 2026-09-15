@@ -6,7 +6,7 @@ Snapshots of perpetual-futures mark prices, index prices and basis from Aevo. Th
 
 | Table | Record |
 |---|---|
-| `e23_perp_mark_index` | An instrument's mark price, index price and basis at an observation time |
+| `perpetual_mark_and_index_prices` | An instrument's mark price, index price and basis at an observation time |
 
 ## Using the data
 

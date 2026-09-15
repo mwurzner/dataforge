@@ -6,7 +6,7 @@ Indicative fiat-to-crypto pricing observations from public provider endpoints. T
 
 | Table | Record |
 |---|---|
-| `e12_onramp_quotes` | A provider quote or reference-price observation for an asset and fiat currency, with available amounts and fee fields |
+| `fiat_onramp_quotes` | A provider quote or reference-price observation for an asset and fiat currency, with available amounts and fee fields |
 
 ## Using the data
 

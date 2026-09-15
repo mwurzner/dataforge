@@ -6,9 +6,9 @@ Ethereum mainnet gas suggestions from public RPC providers, recorded alongside p
 
 | Table | Record |
 |---|---|
-| `e29_gas_estimators` | A provider's gas-price and priority-fee suggestions, with its reported head block |
-| `e29_eth_block_fees` | A block's base fee, priority-fee percentiles and gas-used ratio |
-| `e30_gas_estimator_accuracy` | A suggestion compared with block-fee thresholds over a specified horizon |
+| `ethereum_gas_recommendations` | A provider's gas-price and priority-fee suggestions, with its reported head block |
+| `ethereum_block_fees` | A block's base fee, priority-fee percentiles and gas-used ratio |
+| `ethereum_gas_percentile_comparisons` | A suggestion compared with block-fee thresholds over a specified horizon |
 
 ## Interpreting the scores
 

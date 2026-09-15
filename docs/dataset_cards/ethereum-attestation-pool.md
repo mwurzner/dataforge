@@ -6,7 +6,7 @@ Slot-level observations comparing attestations visible in a consensus client's p
 
 | Table | Record |
 |---|---|
-| `e18_attestation_pool` | Attester-slot counts observed pending and included, with their difference and collection coverage |
+| `ethereum_attestation_observations` | Attester-slot counts observed pending and included, with their difference and collection coverage |
 
 ## Using the data
 

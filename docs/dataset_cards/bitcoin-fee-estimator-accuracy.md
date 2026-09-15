@@ -6,8 +6,8 @@ Timestamped Bitcoin fee recommendations from public providers, paired with fee-r
 
 | Table | Record |
 |---|---|
-| `e15_fee_estimators` | A provider's fee recommendation at one observation time and confirmation target |
-| `e28_fee_estimator_accuracy` | A historical recommendation compared with sampled fee percentiles for a block |
+| `bitcoin_fee_recommendations` | A provider's fee recommendation at one observation time and confirmation target |
+| `bitcoin_fee_percentile_comparisons` | A historical recommendation compared with sampled fee percentiles for a block |
 
 ## Interpreting the scores
 

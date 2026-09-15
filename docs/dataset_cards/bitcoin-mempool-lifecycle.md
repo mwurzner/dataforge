@@ -6,10 +6,10 @@ Transaction observations covering first sight, time spent pending, confirmation 
 
 | Table | Record |
 |---|---|
-| `e8_btc_mempool_lifecycle` | A Bitcoin transaction's observed lifecycle, fee information and outcome |
-| `e9_btc_mempool_divergence` | A provider's pending-set size and overlap with other views |
-| `e11_ltc_mempool_lifecycle` | A Litecoin transaction lifecycle observation |
-| `e8_btc_block_composition` | A block's previously observed and newly seen transaction counts |
+| `bitcoin_transaction_lifecycle` | A Bitcoin transaction's observed lifecycle, fee information and outcome |
+| `bitcoin_mempool_comparison` | A provider's pending-set size and overlap with other views |
+| `litecoin_transaction_lifecycle` | A Litecoin transaction lifecycle observation |
+| `bitcoin_block_composition` | A block's previously observed and newly seen transaction counts |
 
 ## Observation coverage
 

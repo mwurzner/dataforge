@@ -6,8 +6,8 @@ Snapshots of listed options on Aevo, including marks, implied volatility, Greeks
 
 | Table | Record |
 |---|---|
-| `e22_options_surface` | An instrument's strike, expiry, mark, forward, implied volatility and Greeks |
-| `e22_options_book` | Best bid and ask, available sizes and quoted implied volatility for a selected instrument |
+| `options_surface` | An instrument's strike, expiry, mark, forward, implied volatility and Greeks |
+| `options_order_book` | Best bid and ask, available sizes and quoted implied volatility for a selected instrument |
 
 ## Using the data
 

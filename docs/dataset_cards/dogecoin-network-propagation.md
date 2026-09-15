@@ -6,10 +6,10 @@ Timestamped block and transaction announcements received from connected Dogecoin
 
 | Table | Record |
 |---|---|
-| `e26_doge_block_propagation` | A peer's announcement of a block, timestamped on receipt |
-| `e26_doge_tx_propagation` | A retained transaction announcement from a peer, timestamped on receipt |
-| `e26_doge_relay_floor` | A peer's advertised minimum relay fee at the time it was received |
-| `e26_doge_p2p_peers` | Peer address, user agent, services and connection or handshake state |
+| `dogecoin_block_announcements` | A peer's announcement of a block, timestamped on receipt |
+| `dogecoin_transaction_announcements` | A retained transaction announcement from a peer, timestamped on receipt |
+| `dogecoin_peer_relay_fees` | A peer's advertised minimum relay fee at the time it was received |
+| `dogecoin_peer_connections` | Peer address, user agent, services and connection or handshake state |
 
 ## Timing and sampling
 

@@ -6,10 +6,10 @@ Timestamped block and transaction announcements received from connected Bitcoin 
 
 | Table | Record |
 |---|---|
-| `e27_bch_block_propagation` | A peer's announcement of a block, timestamped on receipt |
-| `e27_bch_tx_propagation` | A retained transaction announcement from a peer, timestamped on receipt |
-| `e27_bch_relay_floor` | A peer's advertised minimum relay fee at the time it was received |
-| `e27_bch_p2p_peers` | Peer address, user agent, services and connection or handshake state |
+| `bitcoin_cash_block_announcements` | A peer's announcement of a block, timestamped on receipt |
+| `bitcoin_cash_transaction_announcements` | A retained transaction announcement from a peer, timestamped on receipt |
+| `bitcoin_cash_peer_relay_fees` | A peer's advertised minimum relay fee at the time it was received |
+| `bitcoin_cash_peer_connections` | Peer address, user agent, services and connection or handshake state |
 
 ## Timing and sampling
 

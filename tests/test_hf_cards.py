@@ -8,8 +8,9 @@ from unittest.mock import Mock
 from huggingface_hub import CommitOperationAdd
 import yaml
 
-from src.ops.hf_cards import file_identities, publish_one, rewrite_card
+from src.ops.hf_cards import file_identities, publish_one, rewrite_card, validate_config_files
 from src.ops.hf_push import PRODUCTS, _card
+from src.ops.dataset_names import PUBLIC_NAMES, public_configs
 
 
 def info(sha='before', blob='data-blob', private=False):
@@ -30,8 +31,9 @@ class CardTests(unittest.TestCase):
                 self.assertEqual(metadata['license'], 'odc-by')
                 self.assertEqual(metadata['tags'], product['tags'])
                 self.assertEqual(metadata['pretty_name'], product['pretty'])
+                self.assertEqual(metadata['configs'], public_configs(product))
                 for table in product['datasets']:
-                    self.assertIn(f'`{table}`', result)
+                    self.assertIn(f'`{PUBLIC_NAMES[table]}`', result)
                 # Validate Python examples without fetching data.
                 for example in result.split('```python\n')[1:]:
                     compile(example.split('```', 1)[0], name, 'exec')
@@ -40,6 +42,38 @@ class CardTests(unittest.TestCase):
         for card in (b'no front matter', b'---\nlicense: proprietary\n---\ntext'):
             with self.assertRaises(ValueError):
                 rewrite_card(card, 'bitcoin-mempool-lifecycle')
+
+    def test_new_names_select_original_files_and_have_one_default(self):
+        all_tables = {table for product in PRODUCTS.values() for table in product['datasets']}
+        self.assertEqual(set(PUBLIC_NAMES), all_tables)
+        self.assertEqual(len(set(PUBLIC_NAMES.values())), len(PUBLIC_NAMES))
+        for product in PRODUCTS.values():
+            configs = public_configs(product)
+            self.assertEqual(sum(config.get('default', False) for config in configs), 1)
+            for table, config in zip(product['datasets'], configs):
+                self.assertEqual(config['data_files'], [{'split': 'train', 'path': f'{table}/**/*.parquet'}])
+                self.assertNotRegex(config['config_name'], r'^e\d+_')
+
+    def test_existing_custom_configs_are_not_overwritten(self):
+        card = b'---\nlicense: odc-by\npretty_name: example\nconfigs:\n- config_name: custom\n  data_files: custom.parquet\n---\ntext'
+        with self.assertRaises(ValueError):
+            rewrite_card(card, 'crypto-options-surface')
+
+    def test_existing_card_without_configs_gets_names_idempotently(self):
+        card = b'---\nlicense: odc-by\npretty_name: example\nextra_metadata: preserved\n---\ntext'
+        updated = rewrite_card(card, 'crypto-options-surface')
+        self.assertEqual(updated, rewrite_card(updated, 'crypto-options-surface'))
+        self.assertEqual(yaml.safe_load(updated.decode().split('---')[1])['extra_metadata'], 'preserved')
+
+    def test_config_validation_refuses_missing_or_uncovered_partitions(self):
+        name = 'crypto-options-surface'
+        files = [SimpleNamespace(rfilename=f'{table}/2026/09/sample.parquet') for table in PRODUCTS[name]['datasets']]
+        valid = SimpleNamespace(siblings=files)
+        validate_config_files(valid, name)
+        with self.assertRaises(ValueError):
+            validate_config_files(SimpleNamespace(siblings=files[:-1]), name)
+        with self.assertRaises(ValueError):
+            validate_config_files(SimpleNamespace(siblings=files + [SimpleNamespace(rfilename='unmapped/2026/09/sample.parquet')]), name)
 
     def test_single_readme_operation_with_parent_lock_and_hash_verification(self):
         api = Mock()
