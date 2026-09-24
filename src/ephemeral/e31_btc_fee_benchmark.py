@@ -340,16 +340,21 @@ class Benchmark:
         return record
 
     def checkpoint(self, partition_id):
-        # Unique per-round partitions bound memory and survive abrupt runner termination.
+        # New observations accumulate in a run-owned hourly shard, with daily directories.
+        # Existing archived partitions are never rewritten. Keep round_id on every row.
         # Write observations before state: a crash may replay events, never skip unwritten ones.
+        hour = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H')
         for dataset, rows in self.rows.items():
             if not rows:
                 continue
-            directory = self.root / dataset / self.run_id[:4] / self.run_id[5:7]
+            directory = self.root / dataset / hour[:4] / hour[5:7] / hour[8:10]
             directory.mkdir(parents=True, exist_ok=True)
-            path = directory / f"{partition_id}.parquet"
+            path = directory / f"{self.run_id}-{hour}-hourly.parquet"
             temp = path.with_suffix(".parquet.tmp")
-            pq.write_table(table_for(dataset, rows, self.run_id), temp)
+            table = table_for(dataset, rows, self.run_id)
+            if path.exists():
+                table = pa.concat_tables([pq.ParquetFile(path).read(), table])
+            pq.write_table(table, temp, compression='zstd')
             os.replace(temp, path)
         atomic_json(self.path, self.state)
         self.rows = {name: [] for name in DATASETS}

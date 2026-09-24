@@ -92,7 +92,9 @@ def write(dataset: str, df: pd.DataFrame, run_id: str, quiet: bool = False) -> P
     out = df.copy()
     out.insert(0, "run_id", run_id)
     p = d / f"{run_id}.parquet"
-    out.to_parquet(p, index=False)          # overwrite: checkpoints supersede each other
+    tmp = p.with_suffix('.parquet.tmp')
+    out.to_parquet(tmp, index=False)
+    os.replace(tmp, p)                    # atomic: checkpoints supersede this run's file
     if not quiet:
         print(f"  wrote {dataset}: {len(out):,} rows -> {p.relative_to(DATA)}", flush=True)
     return p
@@ -320,13 +322,30 @@ def _quote_round():
     each opens its own HTTP connections and returns a fresh DataFrame, which the main thread
     appends. Nothing here touches `tracker`, `btc` or `ltc`.
     """
-    q, r = e10_quotes.sample()
-    surf = e22_options_surface.sample()
-    # Books cost one request each, so they run here on the worker thread rather than inline:
-    # about 25s for the ladder, which must not stall the 2s Bitcoin fee sampling.
-    sq, sr = e24_solana_quotes.sample()
-    return (q, r, e12_onramp.sample(), e13_remit.sample(), e17_perpdepth.sample(),
-            surf, e22_options_surface.books(surf), e23_perp_mark.sample(), sq, sr)
+    def options():
+        surface = e22_options_surface.sample()
+        return surface, e22_options_surface.books(surface)
+
+    jobs = [('quotes', e10_quotes.sample, (0, 1)),
+            ('options', options, (5, 6)),
+            ('perp_depth', e17_perpdepth.sample, (4,)),
+            ('perp_marks', e23_perp_mark.sample, (7,)),
+            ('solana', e24_solana_quotes.sample, (8, 9)),
+            ('onramp', e12_onramp.sample, (2,)),
+            ('remittance', e13_remit.sample, (3,))]
+    result = [pd.DataFrame() for _ in range(10)]
+    errors = []
+    # Independent source failures cannot discard the other panels. Per-source pacing remains.
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix='quote-source') as pool:
+        pending = [(name, pool.submit(fn), slots) for name, fn, slots in jobs]
+        for name, future, slots in pending:
+            try:
+                value = future.result()
+                for slot, frame in zip(slots, value if len(slots) > 1 else [value]):
+                    result[slot] = frame
+            except Exception as exc:
+                errors.append(f'{name}: {type(exc).__name__}')
+    return (*result, errors)
 
 
 def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_rows,
@@ -335,25 +354,19 @@ def _collect_quotes(fut, quote_rows, route_rows, onramp_rows, remit_rows, depth_
     if fut is None or not fut.done():
         return False
     try:
-        _q, _r, _o, _rm, _d, _s, _b, _mk, _sq, _sr = fut.result()
-        quote_rows.append(_q)
-        if len(_r):
-            route_rows.append(_r)
-        onramp_rows.append(_o)
-        remit_rows.append(_rm)
-        depth_rows.append(_d)
-        surf_rows.append(_s)
-        book_rows.append(_b)
-        mark_rows.append(_mk)
-        sq_rows.append(_sq)
-        if len(_sr):
-            sr_rows.append(_sr)
+        *frames, errors = fut.result()
+        failures.extend(errors)
+        destinations = [quote_rows, route_rows, onramp_rows, remit_rows, depth_rows,
+                        surf_rows, book_rows, mark_rows, sq_rows, sr_rows]
+        for frame, destination in zip(frames, destinations):
+            if len(frame):
+                destination.append(frame)
     except Exception as exc:
         failures.append(f"quote round: {exc}")
     return True
 
 
-def _checkpoint(run_id: str, tracker, div_rows, btc, btc_div_rows, quote_rows=()) -> None:
+def _checkpoint(run_id: str, tracker, div_rows, btc, btc_div_rows, quote_rows=(), panels=None) -> None:
     """Partial write of everything held in memory. For E1 the fate of anything not yet mined is
     'unresolved', because reconciliation has not run -- never claim 'dropped' without evidence."""
     if tracker.seen:
@@ -372,6 +385,10 @@ def _checkpoint(run_id: str, tracker, div_rows, btc, btc_div_rows, quote_rows=()
               pd.concat(btc_div_rows, ignore_index=True), run_id, quiet=True)
     if len(quote_rows):
         write(e10_quotes.DATASET, pd.concat(quote_rows, ignore_index=True), run_id, quiet=True)
+    for dataset, frames in (panels or {}).items():
+        snapshot = [frame for frame in list(frames) if len(frame)]
+        if snapshot:
+            write(dataset, pd.concat(snapshot, ignore_index=True), run_id, quiet=True)
 
 
 def main() -> int:
@@ -434,6 +451,14 @@ def main() -> int:
     onramp_rows: list[pd.DataFrame] = []
     remit_rows: list[pd.DataFrame] = []
     failures: list[str] = []
+    panel_buffers = {
+        e22_options_surface.DATASET: surf_rows, e22_options_surface.BOOK_DATASET: book_rows,
+        e23_perp_mark.DATASET: mark_rows, e17_perpdepth.DATASET: depth_rows,
+        e24_solana_quotes.DATASET: sq_rows, e24_solana_quotes.ROUTE_DATASET: sr_rows,
+        e10_quotes.ROUTE_DATASET: route_rows, e12_onramp.DATASET: onramp_rows,
+        e13_remit.DATASET: remit_rows, e15_feeest.DATASET: fee_rows,
+        e29_gas_estimators.DATASET: gas_rows, e29_gas_estimators.BLOCK_DATASET: gas_block_rows,
+    }
 
     # The fee sampler runs on its own clock from here; see _fee_sampler for why it cannot
     # live in the main loop. Daemon so a crash in the loop can never leave it running.
@@ -557,7 +582,7 @@ def main() -> int:
                 last_quote = now
 
             if now - last_ckpt >= CHECKPOINT_EVERY_S:
-                _checkpoint(run_id, tracker, div_rows, btc, btc_div_rows, quote_rows)
+                _checkpoint(run_id, tracker, div_rows, btc, btc_div_rows, quote_rows, panel_buffers)
                 last_ckpt = now
             if tracker.n_poll % 240 == 0 and tracker.n_poll:
                 print(f"    {(now-t0)/60:6.1f} min  ETH seen {len(tracker.seen):>8,} "
@@ -936,6 +961,8 @@ def main() -> int:
               f"median spread {okq['spread_bps'].median():.1f} bps", flush=True)
         write(e10_quotes.DATASET, qdf, run_id)
 
+    from src.ops.collection_health import report
+    report({**panel_buffers, e10_quotes.DATASET: quote_rows}, failures)
     # Run-level telemetry, so a degraded run is visible without opening the data.
     write("e0_run_manifest", pd.DataFrame([{
         "started_utc": datetime.fromtimestamp(t0, timezone.utc).isoformat(timespec="seconds"),

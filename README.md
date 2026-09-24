@@ -1,5 +1,7 @@
 # DataForge
 
+The private **Bounded market research** pilot records hourly options, spot, prediction-market and yield observations. New research storage is capped at 5 MB/day. See the [storage budget, collection limits and research plan](docs/bounded_market_research.md).
+
 ## Loading the public datasets
 
 The [DataForge Hugging Face datasets](https://huggingface.co/dataforge-labs) use descriptive table names such as `options_surface`, `bitcoin_fee_recommendations` and `remittance_quotes`.
