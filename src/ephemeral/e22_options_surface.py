@@ -111,6 +111,8 @@ def sample() -> pd.DataFrame:
 def _ladder(surface: pd.DataFrame) -> list[str]:
     """Instruments to pull books for: near the forward, across expiries, skipping the front."""
     out: list[str] = []
+    if not {'error', 'expiry_ts', 'strike', 'asset', 'forward_price', 'instrument_name'}.issubset(surface.columns):
+        return out
     live = surface[surface.error.isna() & surface.expiry_ts.notna() & surface.strike.notna()]
     for asset in BOOK_ASSETS:
         a = live[live.asset == asset]
