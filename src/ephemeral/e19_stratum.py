@@ -16,7 +16,7 @@ import pandas as pd
 
 DATASET = "e19_stratum_jobs"
 STREAM = "https://stratum.work/api/stream"
-HDRS = {"User-Agent": "dataforge/1.0 (research; contact via github.com/mwurzner)",
+HDRS = {"User-Agent": "dataforge/1.0 (research; contact via huggingface.co/dataforge-labs)",
         "Accept": "text/event-stream"}
 
 
