@@ -38,7 +38,10 @@ RETAIN_DAYS = int(os.environ.get("DF_GIT_RETAIN_DAYS", 14))
 
 # Only the high-volume lifecycle sets are ever pruned. Everything else is small and stays, because
 # the manifests are the evidence of what was collected and when.
-HEAVY = {"e1_mempool_lifecycle", "e8_btc_mempool_lifecycle"}
+HEAVY = {"e1_mempool_lifecycle", "e8_btc_mempool_lifecycle",
+         # Transaction bodies and per-block digests: tens of MB a day, archive-only on HF.
+         *(f"e35_{chain}_{table}" for chain in ("btc", "ltc", "doge", "bch")
+           for table in ("unmined_tx", "chain_blocks"))}
 
 
 def main() -> int:

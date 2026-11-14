@@ -219,7 +219,16 @@ ARCHIVE_ONLY = {"a1_lending_market_state", "a2_vault_state", "b2_stuck_markets",
                 "e19_stratum_jobs",
                 # New observation panel stays private until its outcome semantics are validated.
                 "e31_btc_fee_quotes", "e31_btc_tx_observations", "e31_btc_tx_events",
-                "e31_btc_collection_rounds"}
+                "e31_btc_collection_rounds",
+                # Dash and Zcash propagation (2026-11-14). Raw rows carry peer addresses, so
+                # they go to the private archive only; the IP-free product is built from there.
+                "e33_dash_block_propagation", "e33_dash_p2p_peers", "e33_dash_relay_floor",
+                "e33_dash_tx_propagation",
+                "e34_zec_block_propagation", "e34_zec_p2p_peers", "e34_zec_relay_floor",
+                "e34_zec_tx_propagation",
+                # Never-mined capture (2026-11-14): private until the outcome rules are validated.
+                *(f"e35_{chain}_{table}" for chain in ("btc", "ltc", "doge", "bch")
+                  for table in ("unmined_tx", "chain_blocks", "capture_stats"))}
 
 # TERMS REGISTER, checked 2026-08-29 for every source whose OWN data we publish. Read this
 # before adding a product: the gate is the source's terms, not whether the endpoint answers.

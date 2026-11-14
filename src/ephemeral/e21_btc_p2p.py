@@ -4,8 +4,9 @@ One row per (block, peer): when that peer announced that block to us. A second t
 per-peer connection state.
 
 Operational notes:
-  fRelay is 1: peers announce transactions, which TX_DATASET samples by txid. getdata is never
-  sent, so no transaction body is ever fetched, only announcement timing.
+  fRelay is 1: peers announce transactions, which TX_DATASET samples by txid. The timing tables
+  are built from announcements alone. Bodies are requested only when a collector is given a
+  `capture` (see p2p_capture.py), which keeps the transactions that were never mined.
   Dialling is bounded per pass. An unbounded loop starves the poll that collects data.
   run() closes its connections on return, so call it once for the whole window with a stop
   event rather than repeatedly with a short duration.
@@ -23,6 +24,8 @@ import time
 import urllib.request
 
 import pandas as pd
+
+from src.ephemeral import p2p_capture
 
 DATASET = "e21_btc_block_propagation"
 PEER_DATASET = "e21_btc_p2p_peers"
@@ -81,6 +84,57 @@ BCH_PEER_DATASET = "e27_bch_p2p_peers"
 BCH_FLOOR_DATASET = "e27_bch_relay_floor"
 BCH_TX_DATASET = "e27_bch_tx_propagation"
 
+# DASH AND ZCASH speak the same framing but differ in three ways that matter here, each of
+# which is a switch on the collector rather than a fork of it:
+#   * they refuse peers that advertise an old protocol version, so the version is per network
+#     and follows the highest one a peer has shown us;
+#   * a block's hash is not sha256d of an 80-byte header (Dash hashes with X11, a Zcash header is
+#     1,487 bytes), so blocks are taken from `inv` only and the header paths stay off;
+#   * Zcash announces version-5 transactions as 68-byte entries (txid + authorizing-data digest).
+# Peers come from each project's published DNS seeds. Added 2026-11-14; no earlier history.
+DASH_MAGIC = bytes.fromhex("bf0c6bbd")
+DASH_PORT = 9999
+DASH_SEEDS = ["dnsseed.dash.org"]
+# Dash has a single DNS seed, and some resolvers fail on its answer. When it yields too few
+# peers the collector falls back to the fixed-seed list published in Dash Core's own source
+# tree, and if that cannot be fetched either, to a short sample of it taken on 2026-11-14.
+DASH_FIXED_SEEDS_URL = "https://raw.githubusercontent.com/dashpay/dash/develop/contrib/seeds/nodes_main.txt"
+DASH_FALLBACK_PEERS = (
+    "217.154.231.20 207.244.247.40 194.135.80.33 185.185.40.171 178.253.253.5 177.93.141.86 "
+    "168.119.80.4 157.173.122.26 149.104.110.119 139.28.97.2 114.132.172.215 104.207.73.175 "
+    "89.125.50.206 87.229.22.148 84.247.180.201 81.227.250.51 77.221.148.204 66.244.243.70 "
+    "51.158.188.88 46.62.132.144 45.135.180.68 38.102.125.108 31.58.170.130 5.35.103.25").split()
+DASH_PROTOCOL = 70230
+DASH_DATASET = "e33_dash_block_propagation"
+DASH_PEER_DATASET = "e33_dash_p2p_peers"
+DASH_FLOOR_DATASET = "e33_dash_relay_floor"
+DASH_TX_DATASET = "e33_dash_tx_propagation"
+
+ZEC_MAGIC = bytes.fromhex("24e92764")
+ZEC_PORT = 8233
+ZEC_SEEDS = ["dnsseed.z.cash", "dnsseed.str4d.xyz", "mainnet.seeder.zfnd.org",
+             "mainnet.is.yolo.money"]
+ZEC_PROTOCOL = 170190
+ZEC_WIDE_INV = {5: 68}
+ZEC_DATASET = "e34_zec_block_propagation"
+ZEC_PEER_DATASET = "e34_zec_p2p_peers"
+ZEC_FLOOR_DATASET = "e34_zec_relay_floor"
+ZEC_TX_DATASET = "e34_zec_tx_propagation"
+
+# Never-mined capture tables, one set per network that has it switched on.
+CAPTURE_DATASETS = {
+    chain: (f"e35_{chain}_unmined_tx", f"e35_{chain}_chain_blocks", f"e35_{chain}_capture_stats")
+    for chain in ("btc", "ltc", "doge", "bch")
+}
+
+
+def make_capture(chain: str) -> "p2p_capture.TxCapture":
+    """The capture add-on for one of the four original networks."""
+    return p2p_capture.TxCapture(
+        chain, segwit=chain in ("btc", "ltc"), auxpow=chain == "doge",
+        ua_allow=p2p_capture.BCH_FAMILIES if chain == "bch" else None)
+
+
 # SAMPLING IS SIZED PER CHAIN FROM MEASURED VOLUME, not set once and hoped. Announcements
 # counted over one 280s window, unsampled: Litecoin 19,225, Dogecoin 2,825, Bitcoin Cash 1,594,
 # against Bitcoin's 74,342. Left unsampled, Litecoin alone would write ~5.6M rows a day and
@@ -90,29 +144,68 @@ NO_SAMPLING = 256          # keep every announcement, for chains quiet enough to
 LTC_TX_CUT = 26            # of 256, i.e. ~1 in 10
 
 
-def _dns_collector(seeds, port, magic, chain, target, tx_cut):
+def _dns_collector(seeds, port, magic, chain, target, tx_cut, **kw):
     src = lambda n: dns_peer_list(seeds, port, n)
     return BlockPropagationCollector(peers=src(target * 2), target=target,
-                                     magic=magic, chain=chain, refill=src, tx_cut=tx_cut)
+                                     magic=magic, chain=chain, refill=src, tx_cut=tx_cut, **kw)
 
 
-def make_ltc_collector(target: int = 60) -> "BlockPropagationCollector":
+def make_ltc_collector(target: int = 60, capture=None) -> "BlockPropagationCollector":
     """A Litecoin collector, same class, different network."""
-    return _dns_collector(LTC_SEEDS, LTC_PORT, LTC_MAGIC, "ltc", target, LTC_TX_CUT)
+    return _dns_collector(LTC_SEEDS, LTC_PORT, LTC_MAGIC, "ltc", target, LTC_TX_CUT, capture=capture)
 
 
-def make_doge_collector(target: int = 50) -> "BlockPropagationCollector":
-    return _dns_collector(DOGE_SEEDS, DOGE_PORT, DOGE_MAGIC, "doge", target, NO_SAMPLING)
+def make_doge_collector(target: int = 50, capture=None) -> "BlockPropagationCollector":
+    return _dns_collector(DOGE_SEEDS, DOGE_PORT, DOGE_MAGIC, "doge", target, NO_SAMPLING,
+                          capture=capture)
 
 
-def make_bch_collector(target: int = 50) -> "BlockPropagationCollector":
-    return _dns_collector(BCH_SEEDS, BCH_PORT, BCH_MAGIC, "bch", target, NO_SAMPLING)
+def make_bch_collector(target: int = 50, capture=None) -> "BlockPropagationCollector":
+    return _dns_collector(BCH_SEEDS, BCH_PORT, BCH_MAGIC, "bch", target, NO_SAMPLING,
+                          capture=capture)
+
+
+def dash_peer_list(limit: int = 150) -> list[tuple[str, int]]:
+    """Dash peers: the DNS seed, then Dash Core's published fixed seeds, then a stored sample."""
+    peers = dns_peer_list(DASH_SEEDS, DASH_PORT, limit)
+    if len(peers) >= 10:
+        return peers
+    found = set(peers)
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(
+            DASH_FIXED_SEEDS_URL, headers={"User-Agent": "dataforge/1.0"}), timeout=30)
+        for line in r.read().decode("utf-8", "ignore").splitlines():
+            addr = line.split("#")[0].strip()
+            host, _, port = addr.rpartition(":")
+            if port == str(DASH_PORT) and host.count(".") == 3 and host.replace(".", "").isdigit():
+                found.add((host, DASH_PORT))
+    except Exception:
+        pass
+    if len(found) < 10:
+        found |= {(h, DASH_PORT) for h in DASH_FALLBACK_PEERS}
+    peers = list(found)
+    random.shuffle(peers)
+    return peers[:limit]
+
+
+def make_dash_collector(target: int = 50) -> "BlockPropagationCollector":
+    return BlockPropagationCollector(
+        peers=dash_peer_list(target * 2), target=target, magic=DASH_MAGIC, chain="dash",
+        refill=dash_peer_list, tx_cut=NO_SAMPLING, proto=DASH_PROTOCOL, hash_headers=False)
+
+
+def make_zec_collector(target: int = 50) -> "BlockPropagationCollector":
+    return _dns_collector(ZEC_SEEDS, ZEC_PORT, ZEC_MAGIC, "zec", target, NO_SAMPLING,
+                          proto=ZEC_PROTOCOL, hash_headers=False, wide_inv=ZEC_WIDE_INV)
 
 # Dialling is sequential and blocking, so it is bounded per pass: unreachable peers are common
 # (roughly 2 in 3), and an unbounded loop starves the select() that actually collects data.
 CONNECTS_PER_PASS = 8
 CONNECT_TIMEOUT_S = 3
 REFILL_COOLDOWN_S = 300
+# No message any of these networks legitimately sends us is larger than a Bitcoin Cash block.
+# A peer claiming more is dropped instead of being buffered without bound.
+MAX_MESSAGE_BYTES = 40_000_000
 
 
 def _checksum(b: bytes) -> bytes:
@@ -128,14 +221,13 @@ def _varstr(b: bytes) -> bytes:
     return bytes([len(b)]) + b if len(b) < 0xfd else b"\xfd" + struct.pack("<H", len(b)) + b
 
 
-def _version_payload() -> bytes:
+def _version_payload(proto: int = PROTOCOL_VERSION) -> bytes:
     # fRelay = 1 at the end: ask peers TO announce transactions. It was 0 while this collector
     # measured only blocks. Announcements are the point of TX_DATASET and are not sent to a peer
     # that declined relay.
     #
-    # getdata is still never sent, so no transaction BODY is requested -- only the inv, which is
-    # the timing. Bandwidth is bounded by that: an inv entry is 36 bytes.
-    return (struct.pack("<iQq", PROTOCOL_VERSION, 0, int(time.time()))
+    # The timing needs only the inv, 36 bytes an entry. Bodies are a separate, optional step.
+    return (struct.pack("<iQq", proto, 0, int(time.time()))
             + b"\x00" * 26 + b"\x00" * 26
             + struct.pack("<Q", random.getrandbits(64))
             + _varstr(USER_AGENT) + struct.pack("<i", 0) + b"\x01")
@@ -195,8 +287,20 @@ def dns_peer_list(seeds: list[str], port: int, limit: int = 150) -> list[tuple[s
 
 class BlockPropagationCollector:
     def __init__(self, peers=None, target: int = 120, magic: bytes = MAGIC,
-                 chain: str = "btc", refill=None, tx_cut: int = TX_SAMPLE_CUT) -> None:
+                 chain: str = "btc", refill=None, tx_cut: int = TX_SAMPLE_CUT,
+                 proto: int = PROTOCOL_VERSION, hash_headers: bool = True,
+                 wide_inv: dict | None = None, capture=None) -> None:
         self.target = target
+        # Advertised protocol version. On networks that reject old versions it follows the
+        # highest version a peer has shown us, so a network upgrade does not lock us out.
+        self.proto = proto
+        self._follow_proto = proto != PROTOCOL_VERSION
+        # False where a block hash cannot be computed from an 80-byte header (see the Dash and
+        # Zcash note above): no compact-block request is sent and header messages are ignored.
+        self.hash_headers = hash_headers
+        self.wide_inv = wide_inv or {}
+        # Optional never-mined capture (p2p_capture.TxCapture). None leaves behaviour unchanged.
+        self.capture = capture
         # The network magic prefixes every frame and is how a Litecoin peer is told apart from a
         # Bitcoin one on the wire. Kept per instance so one process can hold both.
         self.magic = magic
@@ -229,7 +333,7 @@ class BlockPropagationCollector:
         host, port = key
         try:
             s = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_S)
-            s.sendall(_msg("version", _version_payload(), self.magic))
+            s.sendall(_msg("version", _version_payload(self.proto), self.magic))
             s.setblocking(False)
             self.conns[key] = s
             self.bufs[key] = b""
@@ -257,6 +361,9 @@ class BlockPropagationCollector:
             return
         if cmd == "version":
             try:
+                theirs = struct.unpack_from("<i", payload, 0)[0]
+                if self._follow_proto and self.proto < theirs < self.proto + 5000:
+                    self.proto = theirs
                 st["services"] = struct.unpack_from("<Q", payload, 4)[0]
                 i = 4 + 8 + 8 + 26 + 26 + 8
                 n, i = _read_varint(payload, i)
@@ -275,8 +382,9 @@ class BlockPropagationCollector:
                     # sendcmpct(high_bandwidth=1, version=2): ask this peer to PUSH new blocks
                     # to us rather than announce-then-wait. That is what makes the timing a
                     # propagation measurement rather than a round-trip measurement.
-                    self.conns[key].sendall(
-                        _msg("sendcmpct", struct.pack("<BQ", 1, 2), self.magic))
+                    if self.hash_headers:
+                        self.conns[key].sendall(
+                            _msg("sendcmpct", struct.pack("<BQ", 1, 2), self.magic))
                 except Exception:
                     self._drop(key)
         elif cmd == "feefilter" and len(payload) >= 8:
@@ -295,7 +403,11 @@ class BlockPropagationCollector:
                 self.conns[key].sendall(_msg("pong", payload, self.magic))
             except Exception:
                 self._drop(key)
-        elif cmd in ("cmpctblock", "headers"):
+        elif cmd in ("tx", "block", "notfound"):
+            if self.capture is not None:
+                self.capture.safe(self.capture.on_message, key, cmd, payload, time.time())
+                self._send_capture()
+        elif cmd in ("cmpctblock", "headers") and self.hash_headers:
             # Peers in BIP152 high-bandwidth mode push `cmpctblock` directly; others may
             # announce via `headers`. Both paths are handled so no announcement is missed.
             #
@@ -305,6 +417,7 @@ class BlockPropagationCollector:
             # subsequent 11-minute run saw a block announced by 15 peers, ALL of them via inv.
             # The zero was sampling luck -- blocks arrive every ~10 minutes and a 180s window
             now = time.time()
+            cap = self.capture
             try:
                 if cmd == "cmpctblock":
                     hdrs = [payload[:80]] if len(payload) >= 80 else []
@@ -334,22 +447,30 @@ class BlockPropagationCollector:
                     "peer_connected_ts": st.get("connected_ts"),
                     "announce_via": cmd,
                 })
+                if cap is not None:
+                    cap.safe(cap.on_block_announce, key, h, st, now)
+            self._send_capture()
         elif cmd == "inv":
             now = time.time()
             n, i = _read_varint(payload, 0)
             if n is None:
                 return
+            cap = self.capture
+            tx_types = (MSG_TX, MSG_WITNESS_TX) + tuple(self.wide_inv)
             for _ in range(min(n, 5000)):
                 if i + 36 > len(payload):
                     break
                 typ = struct.unpack_from("<I", payload, i)[0]
-                h = payload[i + 4:i + 36][::-1].hex()      # little-endian on the wire
-                i += 36
-                if typ in (MSG_TX, MSG_WITNESS_TX):
+                raw_h = payload[i + 4:i + 36]
+                h = raw_h[::-1].hex()                       # little-endian on the wire
+                i += self.wide_inv.get(typ, 36)
+                if typ in tx_types:
                     self.n_tx_inv += 1
+                    if cap is not None:
+                        cap.safe(cap.on_tx_inv, key, raw_h, now, st)
                     # Sampled on the hash itself, so every peer's view of the same transaction is
-                    # either all in or all out. We never send getdata for these: the body is on
-                    # chain once mined and is not what this measures -- the TIMING is.
+                    # either all in or all out. The timing rows below never need the body; only
+                    # the optional capture above asks for it, and it does so for every txid.
                     if int(h[:2], 16) >= self.tx_cut:
                         continue
                     k = (h, key)
@@ -381,6 +502,24 @@ class BlockPropagationCollector:
                         "peer_connected_ts": st.get("connected_ts"),
                         "announce_via": "inv",
                     })
+                    if cap is not None:
+                        cap.safe(cap.on_block_announce, key, h, st, now)
+            self._send_capture()
+
+    def _send_capture(self) -> None:
+        """Send whatever body requests the capture has queued. A peer we cannot write to is
+        dropped, exactly as for any other failed send."""
+        cap = self.capture
+        if cap is None or not cap.out:
+            return
+        for key, payload in cap.drain():
+            s = self.conns.get(key)
+            if s is None:
+                continue
+            try:
+                s.sendall(_msg("getdata", payload, self.magic))
+            except Exception:
+                self._drop(key)
 
     def run(self, duration_s: float, stop=None) -> int:
         """Hold peers for the WHOLE duration; `stop` ends it early without tearing down early.
@@ -437,6 +576,7 @@ class BlockPropagationCollector:
                     self._drop(key)
                     continue
                 buf = self.bufs[key] + chunk
+                oversized = False
                 while len(buf) >= 24:
                     if buf[:4] != self.magic:
                         cut = buf.find(self.magic, 1)
@@ -446,12 +586,24 @@ class BlockPropagationCollector:
                         buf = buf[cut:]
                         continue
                     ln = struct.unpack_from("<I", buf, 16)[0]
+                    if ln > MAX_MESSAGE_BYTES:
+                        buf = b""
+                        oversized = True
+                        break
                     if len(buf) < 24 + ln:
                         break
                     cmd = buf[4:16].rstrip(b"\x00").decode("ascii", "ignore")
                     self._handle(key, cmd, buf[24:24 + ln])
                     buf = buf[24 + ln:]
-                self.bufs[key] = buf
+                    if key not in self.conns:      # the handler dropped this peer
+                        break
+                if oversized:
+                    self._drop(key)
+                elif key in self.conns:
+                    self.bufs[key] = buf
+            if self.capture is not None:
+                self.capture.safe(self.capture.tick, time.time(), self.conns)
+                self._send_capture()
         for key in list(self.conns):
             self._drop(key, deliberate=True)
         return len(self.rows)

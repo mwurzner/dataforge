@@ -402,18 +402,40 @@ def main() -> int:
     attp = e18_attpool.AttestationPoolTracker()
     strat = e19_stratum.StratumJobCollector()
     sdirect = e20_stratum_direct.DirectStratumCollector()
-    p2p = e21_btc_p2p.BlockPropagationCollector(target=120)
+    # Never-mined capture rides on the four original networks. DF_TX_CAPTURE=0 switches it off
+    # without a code change; the propagation tables are identical either way.
+    capture_on = os.environ.get("DF_TX_CAPTURE", "1") != "0"
+
+    def _cap(chain):
+        return e21_btc_p2p.make_capture(chain) if capture_on else None
+
+    p2p = e21_btc_p2p.BlockPropagationCollector(target=120, capture=_cap("btc"))
     # Three more networks on the same wire protocol and the same class. They are cheap:
     # each holds a few dozen sockets and the threads are almost entirely idle on the network.
     altp2p = [
-        (e21_btc_p2p.make_ltc_collector(target=60), "ltc", e21_btc_p2p.LTC_DATASET,
-         e21_btc_p2p.LTC_PEER_DATASET, e21_btc_p2p.LTC_FLOOR_DATASET, e21_btc_p2p.LTC_TX_DATASET),
-        (e21_btc_p2p.make_doge_collector(target=50), "doge", e21_btc_p2p.DOGE_DATASET,
-         e21_btc_p2p.DOGE_PEER_DATASET, e21_btc_p2p.DOGE_FLOOR_DATASET,
+        (e21_btc_p2p.make_ltc_collector(target=60, capture=_cap("ltc")), "ltc",
+         e21_btc_p2p.LTC_DATASET, e21_btc_p2p.LTC_PEER_DATASET, e21_btc_p2p.LTC_FLOOR_DATASET,
+         e21_btc_p2p.LTC_TX_DATASET),
+        (e21_btc_p2p.make_doge_collector(target=50, capture=_cap("doge")), "doge",
+         e21_btc_p2p.DOGE_DATASET, e21_btc_p2p.DOGE_PEER_DATASET, e21_btc_p2p.DOGE_FLOOR_DATASET,
          e21_btc_p2p.DOGE_TX_DATASET),
-        (e21_btc_p2p.make_bch_collector(target=50), "bch", e21_btc_p2p.BCH_DATASET,
-         e21_btc_p2p.BCH_PEER_DATASET, e21_btc_p2p.BCH_FLOOR_DATASET, e21_btc_p2p.BCH_TX_DATASET),
+        (e21_btc_p2p.make_bch_collector(target=50, capture=_cap("bch")), "bch",
+         e21_btc_p2p.BCH_DATASET, e21_btc_p2p.BCH_PEER_DATASET, e21_btc_p2p.BCH_FLOOR_DATASET,
+         e21_btc_p2p.BCH_TX_DATASET),
     ]
+    # Dash and Zcash, added 2026-11-14. Built inside a guard: finding their peers involves DNS
+    # and possibly one HTTP fetch, and a failure there must cost these two networks only.
+    for _make, _name, _sets in (
+            (e21_btc_p2p.make_dash_collector, "dash",
+             (e21_btc_p2p.DASH_DATASET, e21_btc_p2p.DASH_PEER_DATASET,
+              e21_btc_p2p.DASH_FLOOR_DATASET, e21_btc_p2p.DASH_TX_DATASET)),
+            (e21_btc_p2p.make_zec_collector, "zec",
+             (e21_btc_p2p.ZEC_DATASET, e21_btc_p2p.ZEC_PEER_DATASET,
+              e21_btc_p2p.ZEC_FLOOR_DATASET, e21_btc_p2p.ZEC_TX_DATASET))):
+        try:
+            altp2p.append((_make(target=50), _name, *_sets))
+        except Exception as exc:
+            print(f"  !! {_name} p2p collector not started: {type(exc).__name__}: {exc}", flush=True)
     ltc = e8_btc_mempool.BtcMempoolTracker(e8_btc_mempool.CHAINS["ltc"]["primary"],
                                            e8_btc_mempool.CHAINS["ltc"]["secondary"])
     preconf = e14_preconf.make_watchers()
@@ -486,9 +508,12 @@ def main() -> int:
     p2p_thread = threading.Thread(target=_p2p_reader, args=(p2p, fee_stop, failures),
                                   name="btc-p2p", daemon=True)
     p2p_thread.start()
+    alt_p2p_threads = []
     for _c, _name, *_ in altp2p:
-        threading.Thread(target=_p2p_reader, args=(_c, fee_stop, failures),
-                         name=f"{_name}-p2p", daemon=True).start()
+        _t = threading.Thread(target=_p2p_reader, args=(_c, fee_stop, failures),
+                              name=f"{_name}-p2p", daemon=True)
+        _t.start()
+        alt_p2p_threads.append(_t)
     preconf_thread = threading.Thread(target=_preconf_sampler,
                                       args=(preconf, fee_stop, failures),
                                       name="l2-preconf", daemon=True)
@@ -614,6 +639,9 @@ def main() -> int:
         sdirect_thread.join(timeout=15)
     if p2p_thread is not None:
         p2p_thread.join(timeout=20)
+    # The other networks' readers are joined too, so their state is quiet when it is read below.
+    for _t in alt_p2p_threads:
+        _t.join(timeout=20)
 
     if quote_future is not None:
         try:
@@ -853,6 +881,28 @@ def main() -> int:
         print(f"  {name}: {len(c.frame()):,} block announcements, "
               f"{len(c.tx_frame()):,} tx announcements, {len(c.floor_frame())} floors "
               f"| handshakes {c.n_handshakes} held {len(c.state)}", flush=True)
+
+    # Never-mined capture. Guarded per network: these tables are an add-on, and a failure to
+    # write one must not stop the tables that follow.
+    for c, name in [(p2p, "btc")] + [(c, name) for c, name, *_ in altp2p]:
+        cap = getattr(c, "capture", None)
+        if cap is None:
+            continue
+        try:
+            frames = (cap.unmined_frame(), cap.blocks_frame(), cap.stats_frame())
+            for target, frame in zip(e21_btc_p2p.CAPTURE_DATASETS[name], frames):
+                if len(frame):
+                    write(target, frame, run_id)
+            u = frames[0]
+            n_replaced = int((u.status == "conflict_mined").sum()) if len(u) else 0
+            n_conflict = int((u.status == "conflict_seen").sum()) if len(u) else 0
+            note = f" | DISABLED: {cap.disabled_reason}" if cap.disabled_reason else ""
+            print(f"  E35 {name}: {len(u):,} unmined txs ({n_replaced} replaced by a mined tx, "
+                  f"{n_conflict} conflicting announcements) | {len(frames[1])} blocks | bodies "
+                  f"received {cap.n['tx_received']:,} of {cap.n['tx_requested']:,} | errors "
+                  f"{cap.n['errors']}{note}", flush=True)
+        except Exception as exc:
+            failures.append(f"e35 {name}: {type(exc).__name__}: {exc}")
 
     fdf = p2p.floor_frame()
     if len(fdf):
