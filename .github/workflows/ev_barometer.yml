@@ -1,0 +1,39 @@
+name: Laadbarometer
+
+# Public snapshot page of Dutch public charging: share of charge points in fault per operator and
+# published prices, from NDW's CC0 open files. One snapshot an hour is added to a rolling
+# fourteen-day history, and the page shows the seven-day average once enough snapshots exist.
+# Published as a static Hugging Face Space. See src/ops/ev_barometer.py for what is counted.
+#
+# Independent of the EV charging recorder (which keeps the full private history) and of the
+# peer-to-peer collector: this job only reads the two public files and writes the Space.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dataforge-laadbarometer
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Take a snapshot and publish the page
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: dataforge-labs
+        run: python -m src.ops.ev_barometer --publish

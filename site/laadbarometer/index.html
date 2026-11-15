@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laadbarometer: storingen en prijzen van publieke laadpalen</title>
+<meta name="description" content="Welk deel van de publieke laadpalen staat in storing, per exploitant, en wat kost laden zonder abonnement? Onafhankelijk overzicht op basis van open data, elk uur ververst.">
+<style>
+:root {
+  --bg: #f6f7f4; --card: #ffffff; --ink: #18211c; --muted: #5b665f; --line: #dfe4dd;
+  --accent: #1f7a4d; --bad: #c2452d; --warn: #c98a12; --soft: #eef2ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121613; --card: #1a201c; --ink: #e8ede9; --muted: #9aa69e; --line: #2b332d;
+    --accent: #5fc28f; --bad: #ef7a62; --warn: #e5b04a; --soft: #202722;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121613; --card: #1a201c; --ink: #e8ede9; --muted: #9aa69e; --line: #2b332d;
+  --accent: #5fc28f; --bad: #ef7a62; --warn: #e5b04a; --soft: #202722;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 28px 16px 56px; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.25rem; margin: 40px 0 6px; }
+p { margin: 8px 0; }
+.lead { color: var(--muted); max-width: 62ch; }
+#updated { color: var(--muted); font-size: 0.9rem; margin-top: 14px; }
+a { color: var(--accent); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 22px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.tile .label { color: var(--muted); font-size: 0.82rem; }
+.tile .value { font-size: 1.7rem; font-weight: 650; letter-spacing: -0.01em; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.tile .sub { color: var(--muted); font-size: 0.8rem; }
+.note { color: var(--muted); font-size: 0.9rem; max-width: 70ch; }
+.scroll { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-variant-numeric: tabular-nums; }
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 0.8rem; color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; background: var(--soft); }
+tbody tr:last-child td { border-bottom: 0; }
+.num { text-align: right; }
+.bar { display: inline-block; width: 64px; height: 8px; background: var(--soft); border-radius: 4px; margin-right: 8px; vertical-align: middle; overflow: hidden; }
+.bar span { display: block; height: 100%; border-radius: 4px; }
+.bar.bad span { background: var(--bad); }
+.bar.warn span { background: var(--warn); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; }
+.card h3 { margin: 0 0 6px; font-size: 1rem; }
+ol { margin: 0; padding-left: 22px; }
+li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+li:last-child { border-bottom: 0; }
+li > span:first-child { display: inline-block; min-width: 46%; }
+li .num { float: right; font-variant-numeric: tabular-nums; }
+li small { color: var(--muted); margin-left: 6px; }
+.method li { border: 0; padding: 3px 0; }
+footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.88rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Laadbarometer</h1>
+  <p class="lead">Hoe staat het publieke laadnetwerk in Nederland ervoor? Welk deel van de laadpalen staat in storing, per exploitant, en wat kost laden zonder abonnement? Onafhankelijk overzicht, gemaakt van de open data die exploitanten wettelijk moeten aanleveren. Elk uur ververst.</p>
+  <div id="updated">Cijfers laden…</div>
+
+  <section class="tiles" id="tiles" aria-label="Landelijk beeld"></section>
+
+  <h2>Per exploitant</h2>
+  <p class="note" id="basis"></p>
+  <p class="note">Alle exploitanten met minstens 1.000 publieke laadpunten. Klik op een kolomkop om te sorteren.</p>
+  <div class="scroll"><table id="operators" aria-label="Exploitanten"></table></div>
+  <p class="note"><strong>Let op bij het vergelijken.</strong> De statussen komen van de exploitanten zelf. Wie storingen niet doorgeeft, lijkt beter dan hij is. Kijk daarom ook naar de kolom "status onbekend": die laat zien welk deel van de laadpunten geen bruikbare status doorgeeft.</p>
+
+  <h2>Wat kost gewoon laden per plaats?</h2>
+  <div class="cols">
+    <div class="card"><h3>Goedkoopste plaatsen</h3><div id="cheapest"></div></div>
+    <div class="card"><h3>Duurste plaatsen</h3><div id="dearest"></div></div>
+  </div>
+  <p class="note" id="cities-note"></p>
+
+  <h2>Zo lezen we de cijfers</h2>
+  <div class="card method">
+    <ul>
+      <li><strong>Bron.</strong> De bestanden met laadpunten en tarieven van het <a href="https://opendata.ndw.nu/" rel="noopener">Nationaal Dataportaal Wegverkeer (NDW)</a>, vrij te gebruiken (CC0). Exploitanten zijn door Europese regels verplicht deze gegevens aan te leveren en zijn zelf verantwoordelijk voor de juistheid.</li>
+      <li><strong>In storing.</strong> Laadpunten met de status "buiten gebruik door storing" (OUTOFORDER). Verwijderde en geplande laadpunten tellen niet mee.</li>
+      <li><strong>Niet in bedrijf.</strong> Laadpunten die nog niet of tijdelijk niet in gebruik zijn (INOPERATIVE). Dat is geen storing.</li>
+      <li><strong>Status onbekend.</strong> Laadpunten waarvan de exploitant geen bruikbare status doorgeeft.</li>
+      <li><strong>Prijs.</strong> De prijs per kWh voor laden zonder abonnement of laadpas, omgerekend naar inclusief 21% btw. Starttarieven en tijdtarieven tellen niet mee. Met een laadpas kan de prijs anders zijn. Controleer altijd de prijs bij de paal.</li>
+      <li><strong>Mediaan.</strong> De middelste prijs: de helft van de laadpunten is goedkoper, de helft duurder.</li>
+    </ul>
+  </div>
+
+  <footer>
+    <p>Gemaakt door <a href="https://huggingface.co/dataforge-labs" rel="noopener">DataForge</a>, niet verbonden aan een exploitant, laadpas of energieleverancier. De cijfers zijn een weergave van openbare gegevens en geen advies.</p>
+    <p>Een fout gezien? <a href="https://huggingface.co/spaces/dataforge-labs/laadbarometer/discussions" rel="noopener">Meld het hier</a>. De ruwe cijfers staan in <a href="latest.json">latest.json</a>.</p>
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
