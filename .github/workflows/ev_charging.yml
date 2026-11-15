@@ -1,0 +1,70 @@
+name: EV charging recorder
+
+# Status and price history of every public charge point in the Netherlands, from NDW's open
+# files (CC0). NDW keeps no history for this stream, so a status that is not recorded here is
+# gone. See src/ops/ev_charging.py for what is stored and why.
+#
+# A WORKFLOW OF ITS OWN, NOT A THREAD IN THE EPHEMERAL COLLECTOR. Parsing the 18 MB file holds
+# the interpreter for seconds at a time, which would smear the arrival timestamps the
+# peer-to-peer collector exists to measure. Nothing here touches that collector or its data repo.
+#
+# SAME CADENCE AS THE COLLECTOR: five 4.5h windows a day, for the reason documented in
+# ephemeral.yml (scheduled starts on this repo run 50 minutes to 1.8 hours late, and a longer
+# window overruns its slot). Gaps cost less here than there: every charge point carries its own
+# status timestamp, so the first poll of a window recovers the latest change made during the gap.
+
+on:
+  schedule:
+    - cron: '37 2,7,12,17,22 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_s:
+        description: 'Recording time in seconds; 900 for a smoke run, 16200 for a normal window'
+        required: false
+        default: '16200'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dataforge-ev-charging
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Record
+        id: record
+        continue-on-error: true      # archive whatever was recorded before judging the run
+        env:
+          DF_EV_DURATION_S: ${{ inputs.duration_s || '16200' }}
+          DF_EV_POLL_S: '300'
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}   # read-only use: is today's snapshot archived yet?
+        run: python -m src.ops.ev_charging
+      - name: Archive privately on Hugging Face
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python -m src.ops.ev_charging --archive
+      - name: Keep the window as an artifact if the archive upload did not succeed
+        # A window cannot be recorded again. The source is CC0 open data, so an artifact on a
+        # public repo exposes nothing that NDW does not already publish.
+        if: always() && hashFiles('data/.e36_archived') == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e36-${{ github.run_id }}
+          path: data/e36_*
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Check recording result
+        if: steps.record.outcome == 'failure'
+        run: exit 1
