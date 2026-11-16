@@ -41,24 +41,63 @@
     return '<span class="bar ' + cls + '"><span style="width:' + w.toFixed(1) + '%"></span></span>';
   }
 
-  function tiles(d) {
-    var n = d.national, a = d.average && d.average.national;
-    var items = [
-      ['Publieke laadpunten', nf0.format(n.points), 'in de landelijke open data'],
-      ['Nu aan het laden', nf1.format(pct(n.charging, n.points)) + '%', nf0.format(n.charging) + ' laadpunten bezet'],
-      ['In storing', nf1.format(a ? a.outoforder : pct(n.outoforder, n.points)) + '%',
-        a ? 'gemiddeld over 7 dagen' : nf0.format(n.outoforder) + ' laadpunten, momentopname'],
-      ['Status onbekend', nf1.format(a ? a.unknown : pct(n.unknown, n.points)) + '%',
-        'geven geen bruikbare status door'],
-      ['Gewoon laden (AC)', d.prices.ac ? euro(d.prices.ac.median) : '–',
-        d.prices.ac ? 'mediaan per kWh; 8 op de 10 tussen ' + euro(d.prices.ac.p10) + ' en ' + euro(d.prices.ac.p90) : ''],
-      ['Snelladen (DC)', d.prices.dc ? euro(d.prices.dc.median) : '–', 'mediaan per kWh']
-    ];
-    return items.map(function (t) {
-      return '<div class="tile"><div class="label">' + esc(t[0]) + '</div><div class="value">' + esc(t[1]) +
-        '</div><div class="sub">' + esc(t[2]) + '</div></div>';
-    }).join('');
+  /* Status parts of the national bar, in drawing order; "other" (blocked, reserved) only in the table. */
+  var PARTS = [['charging', 'laden', 'Aan het laden'], ['available', 'vrij', 'Beschikbaar'], ['unknown', 'onbekend', 'Status onbekend'],
+    ['inoperative', 'niet', 'Niet in bedrijf'], ['outoforder', 'storing', 'In storing']];
+
+  function b(v) { return '<b>' + v + '</b>'; }
+
+  /* Over what span the average runs, said honestly: "de afgelopen zeven dagen" only once it covers that. */
+  function averageSpan(a) {
+    var days = (new Date(a.to) - new Date(a.from)) / 864e5;
+    return days >= 6.5 ? 'de afgelopen zeven dagen' : nf0.format(a.snapshots) + ' metingen sinds ' + when(a.from);
   }
+
+  function summary(d) {
+    var n = d.national, a = d.average && d.average.national;
+    var s = 'Van de ' + b(nf0.format(n.points)) + ' publieke laadpunten zijn er nu ' + b(nf0.format(n.charging)) +
+      ' aan het laden (' + nf1.format(pct(n.charging, n.points)) + '%). ' + b(nf0.format(n.outoforder)) + ' staan in storing (' +
+      b(nf1.format(pct(n.outoforder, n.points)) + '%') + ') en van ' + b(nf0.format(n.unknown)) + ' (' +
+      nf1.format(pct(n.unknown, n.points)) + '%) geeft de exploitant geen bruikbare status door.';
+    if (a && a.outoforder != null) {
+      s += ' Gemiddeld over ' + esc(averageSpan(d.average)) + ' stond ' + b(nf1.format(a.outoforder) + '%') + ' in storing.';
+    }
+    return '<p class="summary">' + s + '</p>';
+  }
+
+  function statusBar(d) {
+    var n = d.national;
+    var parts = PARTS.map(function (p) { return { key: p[0], css: p[1], name: p[2], v: n[p[0]] || 0, share: pct(n[p[0]] || 0, n.points) }; });
+    var label = 'Verdeling van alle laadpunten naar status: ' + parts.map(function (p) {
+      return p.name.toLowerCase() + ' ' + nf1.format(p.share) + '%';
+    }).join(', ') + '.';
+    var bar = '<div class="seg" role="img" aria-label="' + esc(label) + '">' + parts.filter(function (p) { return p.v > 0; }).map(function (p) {
+      return '<span' + (p.share >= 8 ? ' class="l"' : '') + ' style="flex:' + p.v + ' 1 0;background:var(--s-' + p.css + ');color:var(--t-' + p.css + ')" title="' +
+        esc(p.name + ': ' + nf0.format(p.v) + ' laadpunten (' + nf1.format(p.share) + '%)') + '">' +
+        (p.share >= 8 ? nf1.format(p.share) + '%' : '') + '</span>';
+    }).join('') + '</div>';
+    var legend = '<ul class="legend">' + parts.map(function (p) {
+      return '<li><i style="background:var(--s-' + p.css + ')"></i>' + esc(p.name) + '</li>';
+    }).join('') + '</ul>';
+    var rows = parts.concat(n.other ? [{ name: 'Overig (geblokkeerd of gereserveerd)', v: n.other, share: pct(n.other, n.points) }] : []);
+    var table = '<details><summary>Als tabel</summary><table><thead><tr><th>Status</th><th class="num">Laadpunten</th><th class="num">Aandeel</th></tr></thead><tbody>' +
+      rows.map(function (p) {
+        return '<tr><td>' + esc(p.name) + '</td><td class="num">' + nf0.format(p.v) + '</td><td class="num">' + nf1.format(p.share) + '%</td></tr>';
+      }).join('') + '</tbody></table></details>';
+    return bar + legend + table;
+  }
+
+  function prices(d) {
+    function block(title, q, where) {
+      if (!q) { return ''; }
+      return '<div><h3>' + title + '</h3><span class="big">' + euro(q.median) + '</span><p>per kWh ' + where +
+        ', mediaan, zonder abonnement. 8 op de 10 laadpunten vragen tussen ' + euro(q.p10) + ' en ' + euro(q.p90) + '.</p></div>';
+    }
+    return '<div class="prices">' + block('Gewoon laden', d.prices.ac, 'aan een gewone laadpaal (AC)') +
+      block('Snelladen', d.prices.dc, 'bij een snellader (DC)') + '</div>';
+  }
+
+  function national(d) { return summary(d) + statusBar(d) + prices(d); }
 
   function operatorTable(rows, sortKey, desc) {
     var sorted = rows.slice().sort(function (x, y) {
@@ -103,8 +142,8 @@
     return 'Dit is één momentopname. Zodra er genoeg metingen zijn, tonen we het gemiddelde over zeven dagen; dat is eerlijker dan één moment.';
   }
 
-  var api = { esc: esc, pct: pct, euro: euro, when: when, operatorRows: operatorRows, tiles: tiles,
-    operatorTable: operatorTable, cityList: cityList, basis: basis };
+  var api = { esc: esc, pct: pct, euro: euro, when: when, operatorRows: operatorRows, national: national, summary: summary,
+    statusBar: statusBar, prices: prices, operatorTable: operatorTable, cityList: cityList, basis: basis };
   root.Laadbarometer = api;
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; }
 
@@ -115,7 +154,7 @@
   function show(d) {
     var rows = operatorRows(d), sortKey = 'points', desc = true;
     $('updated').textContent = 'Bijgewerkt: ' + when(d.generated);
-    $('tiles').innerHTML = tiles(d);
+    $('nu').innerHTML = national(d);
     $('basis').textContent = basis(d);
     function draw() { $('operators').innerHTML = operatorTable(rows, sortKey, desc); }
     $('operators').addEventListener('click', function (e) {
