@@ -42,6 +42,17 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Publish the Laadbarometer every hour while this window runs
+        # GitHub fires the barometer's own hourly schedule only every few hours on busy days, so
+        # the page would hold too few snapshots for a fair average. This window already runs for
+        # 4.5 hours, so it publishes too. A separate background process: a failed publish never
+        # touches the recording, and the runner ends the loop when the job ends.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_OWNER: dataforge-labs
+        run: |
+          nohup bash -c 'while true; do python -m src.ops.ev_barometer --publish || true; sleep 3600; done' \
+            > barometer.log 2>&1 &
       - name: Record
         id: record
         continue-on-error: true      # archive whatever was recorded before judging the run
