@@ -1,0 +1,68 @@
+name: EV charging recorder (Finland, France)
+
+# Status and price history of public charge points in Finland (Fintraffic Digitraffic, CC 4.0 BY)
+# and France (transport.data.gouv.fr, Base nationale consolidée IRVE, Licence Ouverte 2.0). Neither
+# source keeps history. See src/ops/ev_charging_eu.py for what is stored, and for the attribution
+# both licences require in anything built on these tables.
+#
+# A workflow of its own, beside the Dutch recorder (ev_charging.yml): a problem with one country's
+# source never touches the Dutch recording. Same cadence: five 4.5h windows a day, started five
+# minutes after the Dutch ones.
+
+on:
+  schedule:
+    - cron: '42 2,7,12,17,22 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_s:
+        description: 'Recording time in seconds; 900 for a smoke run, 16200 for a normal window'
+        required: false
+        default: '16200'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dataforge-ev-charging-eu
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Record
+        id: record
+        continue-on-error: true      # archive whatever was recorded before judging the run
+        env:
+          DF_EV_DURATION_S: ${{ inputs.duration_s || '16200' }}
+          DF_EV_POLL_S: '300'
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}   # read-only use: are today's snapshots archived yet?
+        run: python -m src.ops.ev_charging_eu
+      - name: Archive privately on Hugging Face
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python -m src.ops.ev_charging_eu --archive
+      - name: Keep the window as an artifact if the archive upload did not succeed
+        # Both sources are open data with attribution licences; the artifact holds nothing the
+        # sources do not publish themselves (the French contact columns are already removed).
+        if: always() && hashFiles('data/.e37_archived') == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e37-e38-${{ github.run_id }}
+          path: |
+            data/e37_*
+            data/e38_*
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Check recording result
+        if: steps.record.outcome == 'failure'
+        run: exit 1
